@@ -2,6 +2,7 @@ package gonotify
 
 import (
 	"fmt"
+	"path/filepath"
 	"strings"
 	"sync"
 	"syscall"
@@ -52,9 +53,10 @@ type InotifyEvent struct {
  * Inotify is the low level wrapper around inotify_init(), inotify_add_watch() and inotify_rm_watch()
  */
 type Inotify struct {
-	m       sync.Mutex
-	fd      int
-	watches map[string]uint32
+	m        sync.Mutex
+	fd       int
+	watches  map[string]uint32
+	rwatches map[uint32]string
 }
 
 func NewInotify() (*Inotify, error) {
@@ -65,8 +67,9 @@ func NewInotify() (*Inotify, error) {
 	}
 
 	return &Inotify{
-		fd:      fd,
-		watches: make(map[string]uint32),
+		fd:       fd,
+		watches:  make(map[string]uint32),
+		rwatches: make(map[uint32]string),
 	}, nil
 }
 
@@ -79,6 +82,7 @@ func (i *Inotify) AddWatch(pathName string, mask uint32) error {
 
 	i.m.Lock()
 	i.watches[pathName] = uint32(w)
+	i.rwatches[uint32(w)] = pathName
 	i.m.Unlock()
 	return nil
 }
@@ -98,33 +102,45 @@ func (i *Inotify) RmWatch(pathName string) error {
 	}
 
 	delete(i.watches, pathName)
+	delete(i.rwatches, w)
 	return nil
 }
 
-func (i *Inotify) Read() (*InotifyEvent, error) {
+func (i *Inotify) Read() ([]InotifyEvent, error) {
+	events := make([]InotifyEvent, 0, 1024)
+	buf := make([]byte, 1024*(syscall.SizeofInotifyEvent+16))
 
-	buf := make([]byte, syscall.SizeofInotifyEvent+syscall.NAME_MAX+1)
 	n, err := syscall.Read(i.fd, buf)
 
 	if err != nil {
-		return nil, err
+		return events, err
 	}
 
 	if n == 0 {
-		return nil, fmt.Errorf("Short inotify read")
+		return events, fmt.Errorf("Short inotify read")
 	}
 
-	event := (*syscall.InotifyEvent)(unsafe.Pointer(&buf[0]))
-	namebuf := buf[syscall.SizeofInotifyEvent : syscall.SizeofInotifyEvent+event.Len]
+	offset := 0
 
-	name := strings.TrimRight(string(namebuf), "\x00")
+	for offset+syscall.SizeofInotifyEvent < n {
 
-	return &InotifyEvent{
-		Wd:     uint32(event.Wd),
-		Name:   name,
-		Mask:   event.Mask,
-		Cookie: event.Cookie,
-	}, nil
+		event := (*syscall.InotifyEvent)(unsafe.Pointer(&buf[offset]))
+		namebuf := buf[offset+syscall.SizeofInotifyEvent : offset+syscall.SizeofInotifyEvent+int(event.Len)]
+
+		offset += syscall.SizeofInotifyEvent + int(event.Len)
+
+		name := strings.TrimRight(string(namebuf), "\x00")
+		name = filepath.Join(i.rwatches[uint32(event.Wd)], name)
+
+		events = append(events, InotifyEvent{
+			Wd:     uint32(event.Wd),
+			Name:   name,
+			Mask:   event.Mask,
+			Cookie: event.Cookie,
+		})
+	}
+
+	return events, nil
 }
 
 func (i *Inotify) Close() error {

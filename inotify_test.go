@@ -5,6 +5,7 @@ import (
 	"io/ioutil"
 	"os"
 	"path/filepath"
+	"sync"
 	"testing"
 )
 
@@ -23,6 +24,37 @@ func TestOpenClose(t *testing.T) {
 	if err == nil {
 		t.Fail()
 	}
+}
+
+func TestReadFromClosed(t *testing.T) {
+	i, err := NewInotify()
+	if err != nil {
+		t.Error(err)
+	}
+
+	wg := sync.WaitGroup{}
+	wg.Add(1)
+
+	go func() {
+		evt, err := i.Read()
+
+		if err == nil {
+			wg.Done()
+			t.Fail()
+			return
+		}
+
+		if len(evt) != 0 {
+			wg.Done()
+			t.Fail()
+			return
+		}
+
+		wg.Done()
+	}()
+
+	i.Close()
+	wg.Wait()
 }
 
 func BenchmarkWatch(b *testing.B) {
@@ -58,12 +90,15 @@ func TestInotify(t *testing.T) {
 		}
 		f.Close()
 
-		event, err := i.Read()
+		events, err := i.Read()
+
 		if err != nil {
 			t.Error(err)
 		}
 
-		if event.Name != "hz" {
+		event := events[0]
+
+		if event.Name != filepath.Join(dir, "hz") {
 			t.Fail()
 		}
 
@@ -92,17 +127,19 @@ func TestInotify(t *testing.T) {
 			}
 			f.Close()
 
-			event, err := i.Read()
+			events, err := i.Read()
+
 			if err != nil {
 				t.Error(err)
-				fmt.Println("!!!!!!")
 			}
+
+			event := events[0]
 
 			if event.Mask&IN_CLOSE_WRITE == 0 {
 				t.Fail()
 			}
 
-			if event.Name != fileName {
+			if event.Name != filepath.Join(dir, fileName) {
 				t.Fail()
 			}
 
@@ -118,7 +155,7 @@ func TestInotify(t *testing.T) {
 		defer i.Close()
 
 		subdir := filepath.Join(dir, "subdir")
-		err = os.Mkdir(filepath.Join(subdir), os.ModePerm)
+		err = os.Mkdir(subdir, os.ModePerm)
 		if err != nil {
 			t.Error(err)
 		}
@@ -127,12 +164,14 @@ func TestInotify(t *testing.T) {
 
 		os.RemoveAll(subdir)
 
-		event, err := i.Read()
+		events, err := i.Read()
 		if err != nil {
 			t.Error(err)
 		}
 
-		if event.Name != "" {
+		event := events[0]
+
+		if event.Name != subdir {
 			t.Fail()
 		}
 
