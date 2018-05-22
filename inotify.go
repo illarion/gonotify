@@ -2,6 +2,7 @@ package gonotify
 
 import (
 	"fmt"
+	"os"
 	"path/filepath"
 	"strings"
 	"sync"
@@ -15,7 +16,7 @@ const (
 	IN_CLOSE_WRITE   = uint32(syscall.IN_CLOSE_WRITE)   // File opened for writing was closed.
 	IN_CLOSE_NOWRITE = uint32(syscall.IN_CLOSE_NOWRITE) // File or directory not opened for writing was closed.
 	IN_CREATE        = uint32(syscall.IN_CREATE)        // File/directory created in watched directory
-	IN_DELETE        = uint32(syscall.IN_CREATE)        // File/directory deleted from watched directory.
+	IN_DELETE        = uint32(syscall.IN_DELETE)        // File/directory deleted from watched directory.
 	IN_DELETE_SELF   = uint32(syscall.IN_DELETE_SELF)   // Watched file/directory was itself deleted.
 	IN_MODIFY        = uint32(syscall.IN_MODIFY)        // File was modified
 	IN_MOVE_SELF     = uint32(syscall.IN_MOVE_SELF)     // Watched file/directory was itself moved.
@@ -55,12 +56,13 @@ type InotifyEvent struct {
 type Inotify struct {
 	m        sync.Mutex
 	fd       int
+	f        *os.File
 	watches  map[string]uint32
 	rwatches map[uint32]string
 }
 
 func NewInotify() (*Inotify, error) {
-	fd, err := syscall.InotifyInit()
+	fd, err := syscall.InotifyInit1(syscall.IN_CLOEXEC)
 
 	if err != nil {
 		return nil, err
@@ -68,6 +70,7 @@ func NewInotify() (*Inotify, error) {
 
 	return &Inotify{
 		fd:       fd,
+		f:        os.NewFile(uintptr(fd), ""),
 		watches:  make(map[string]uint32),
 		rwatches: make(map[uint32]string),
 	}, nil
@@ -87,22 +90,41 @@ func (i *Inotify) AddWatch(pathName string, mask uint32) error {
 	return nil
 }
 
-func (i *Inotify) RmWatch(pathName string) error {
+func (i *Inotify) RmWd(wd uint32) error {
 	i.m.Lock()
 	defer i.m.Unlock()
 
-	w, ok := i.watches[pathName]
+	pathName, ok := i.rwatches[wd]
 	if !ok {
 		return nil
 	}
 
-	_, err := syscall.InotifyRmWatch(i.fd, w)
+	_, err := syscall.InotifyRmWatch(i.fd, wd)
 	if err != nil {
 		return err
 	}
 
 	delete(i.watches, pathName)
-	delete(i.rwatches, w)
+	delete(i.rwatches, wd)
+	return nil
+}
+
+func (i *Inotify) RmWatch(pathName string) error {
+	i.m.Lock()
+	defer i.m.Unlock()
+
+	wd, ok := i.watches[pathName]
+	if !ok {
+		return nil
+	}
+
+	_, err := syscall.InotifyRmWatch(i.fd, wd)
+	if err != nil {
+		return err
+	}
+
+	delete(i.watches, pathName)
+	delete(i.rwatches, wd)
 	return nil
 }
 
@@ -110,13 +132,13 @@ func (i *Inotify) Read() ([]InotifyEvent, error) {
 	events := make([]InotifyEvent, 0, 1024)
 	buf := make([]byte, 1024*(syscall.SizeofInotifyEvent+16))
 
-	n, err := syscall.Read(i.fd, buf)
+	n, err := i.f.Read(buf)
 
 	if err != nil {
 		return events, err
 	}
 
-	if n == 0 {
+	if n < syscall.SizeofInotifyEvent {
 		return events, fmt.Errorf("Short inotify read")
 	}
 
@@ -131,7 +153,6 @@ func (i *Inotify) Read() ([]InotifyEvent, error) {
 
 		name := strings.TrimRight(string(namebuf), "\x00")
 		name = filepath.Join(i.rwatches[uint32(event.Wd)], name)
-
 		events = append(events, InotifyEvent{
 			Wd:     uint32(event.Wd),
 			Name:   name,
@@ -153,6 +174,5 @@ func (i *Inotify) Close() error {
 			return err
 		}
 	}
-
-	return syscall.Close(i.fd)
+	return i.f.Close()
 }

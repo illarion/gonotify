@@ -1,7 +1,6 @@
 package gonotify
 
 import (
-	"fmt"
 	"io/ioutil"
 	"os"
 	"path/filepath"
@@ -15,6 +14,7 @@ func TestFileWatcher(t *testing.T) {
 		t.Error(err)
 	}
 	defer os.RemoveAll(dir)
+	defer os.Remove(dir)
 
 	t.Run("Simple", func(t *testing.T) {
 
@@ -49,7 +49,8 @@ func TestFileWatcher(t *testing.T) {
 		//TODO checks
 		for x := 0; x < 6; x++ {
 			e := <-fw.C
-			fmt.Printf("%#v\n", e)
+			t.Logf("%#v\n", e)
+			//fmt.Printf("%#v\n", e)
 		}
 
 		fw.Close()

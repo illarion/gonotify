@@ -74,6 +74,7 @@ func TestInotify(t *testing.T) {
 		t.Error(err)
 	}
 	defer os.RemoveAll(dir)
+	defer os.Remove(dir)
 
 	t.Run("OpenFile", func(t *testing.T) {
 		i, err := NewInotify()
