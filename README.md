@@ -11,7 +11,7 @@ Simple Golang inotify wrapper.
 
 * `FileWatcher` - higher level utility, helps to watch the list of files for changes, creation or removal
 * `DirWatcher` - higher level utility, recursively watches given root folder for added, removed or changed files.
-** `FileEvent` - embeds `InotifyEvent` and keeps additional field `Eof` to notify user that there will be no more events. 
+* * `FileEvent` - embeds `InotifyEvent` and keeps additional field `Eof` to notify user that there will be no more events. 
 
 You can use `FileWathcer` and `DirWatcher` as an example and build your own utilities based on `Inotify`.
 
