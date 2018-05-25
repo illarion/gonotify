@@ -8,16 +8,13 @@ import (
 // DirWatcher recursively watches the given root folder, waiting for file events.
 // Events can be masked by providing fileMask. DirWatcher does not generate events for
 // folders or subfolders.
-type FileEvent struct {
-	InotifyEvent
-	Eof bool
-}
-
 type DirWatcher struct {
 	stopC chan struct{}
 	C     chan FileEvent
 }
 
+// NewDirWatcher creates DirWatcher recursively waiting for events in the given root folder and
+// emitting FileEvents in channel C, that correspond to fileMask. Folder events are ignored (having IN_ISDIR set to 1)
 func NewDirWatcher(fileMask uint32, root string) (*DirWatcher, error) {
 	dw := &DirWatcher{
 		stopC: make(chan struct{}),
@@ -38,6 +35,7 @@ func NewDirWatcher(fileMask uint32, root string) (*DirWatcher, error) {
 		}
 
 		if !f.IsDir() {
+
 			//fake event for existing files
 			queue = append(queue, FileEvent{
 				InotifyEvent: InotifyEvent{
@@ -120,11 +118,6 @@ func NewDirWatcher(fileMask uint32, root string) (*DirWatcher, error) {
 					continue
 				}
 
-				// Skip events not conforming with provided mask
-				if event.Mask&fileMask != fileMask {
-					continue
-				}
-
 				events <- FileEvent{
 					InotifyEvent: event,
 				}
@@ -144,6 +137,12 @@ func NewDirWatcher(fileMask uint32, root string) (*DirWatcher, error) {
 					}
 					return
 				}
+
+				// Skip events not conforming with provided mask
+				if event.Mask&fileMask == 0 {
+					continue
+				}
+
 				dw.C <- event
 			}
 		}
