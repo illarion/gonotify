@@ -11,7 +11,16 @@ type FileWatcher struct {
 
 // NewFileWatcher creates FileWatcher with provided inotify mask and list of files to wait events for.
 func NewFileWatcher(mask uint32, files ...string) (*FileWatcher, error) {
+        var fi []string
+        for _, file := range files {
+                fi = append(fi, file)
+        }
+        return NewFileWatcherSlice(mask, fi)
+}
 
+// NewFileWatcher creates FileWatcher with provided inotify mask and array of files to wait events for.
+func NewFileWatcherSlice(mask uint32, files []string) (*FileWatcher, error) {
+	
 	f := &FileWatcher{
 		stopC: make(chan struct{}),
 		C:     make(chan FileEvent),
