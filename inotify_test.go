@@ -182,4 +182,41 @@ func TestInotify(t *testing.T) {
 
 		t.Logf("%#v", event)
 	})
+
+	t.Run("Bug #2 Inotify.Read() discards solo events", func(t *testing.T) {
+		i, err := NewInotify()
+
+		if err != nil {
+			t.Error(err)
+		}
+		defer i.Close()
+
+		subdir := filepath.Join(dir, "subdir")
+		err = os.Mkdir(subdir, os.ModePerm)
+		if err != nil {
+			t.Error(err)
+		}
+
+		i.AddWatch(subdir, IN_CREATE)
+
+		fileName := "single-file.txt"
+
+		f, err := os.OpenFile(filepath.Join(subdir, fileName), os.O_RDWR|os.O_CREATE, 0)
+		if err != nil {
+			t.Error(err)
+		}
+		f.Close()
+
+		events, err := i.Read()
+
+		if err != nil {
+			t.Error(err)
+		}
+
+		expected := 1
+		if len(events) != expected {
+			t.Errorf("Length of read events is %d, but extected %d", len(events), expected)
+		}
+
+	})
 }
