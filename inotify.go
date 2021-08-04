@@ -154,7 +154,7 @@ func (i *Inotify) Read() ([]InotifyEvent, error) {
 
 	offset := 0
 
-	for offset+syscall.SizeofInotifyEvent < n {
+	for offset+syscall.SizeofInotifyEvent <= n {
 
 		event := (*syscall.InotifyEvent)(unsafe.Pointer(&buf[offset]))
 		namebuf := buf[offset+syscall.SizeofInotifyEvent : offset+syscall.SizeofInotifyEvent+int(event.Len)]

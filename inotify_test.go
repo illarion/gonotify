@@ -191,7 +191,7 @@ func TestInotify(t *testing.T) {
 		}
 		defer i.Close()
 
-		subdir := filepath.Join(dir, "subdir")
+		subdir := filepath.Join(dir, "subdir#2_1")
 		err = os.Mkdir(subdir, os.ModePerm)
 		if err != nil {
 			t.Error(err)
@@ -215,6 +215,51 @@ func TestInotify(t *testing.T) {
 
 		expected := 1
 		if len(events) != expected {
+			t.Errorf("Length of read events is %d, but extected %d", len(events), expected)
+		}
+
+	})
+
+	t.Run("Bug #2 Inotify.Read() discards solo events (case 2)", func(t *testing.T) {
+		i, err := NewInotify()
+
+		if err != nil {
+			t.Error(err)
+		}
+		defer i.Close()
+
+		subdir := filepath.Join(dir, "subdir#2_2")
+		err = os.Mkdir(subdir, os.ModePerm)
+		if err != nil {
+			t.Error(err)
+		}
+
+		fileName := "single-file.txt"
+		fullPath := filepath.Join(subdir, fileName)
+
+		f, err := os.OpenFile(fullPath, os.O_RDWR|os.O_CREATE, 0666)
+		if err != nil {
+			t.Error(err)
+		}
+
+		i.AddWatch(fullPath, IN_MODIFY)
+
+		f.Write([]byte("Hello world\n"))
+		f.Close()
+
+		events, err := i.Read()
+
+		if err != nil {
+			t.Error(err)
+		}
+
+		expected := 1
+		if len(events) != expected {
+
+			for _, event := range events {
+				fmt.Printf("Event %#v\n", event)
+			}
+
 			t.Errorf("Length of read events is %d, but extected %d", len(events), expected)
 		}
 
