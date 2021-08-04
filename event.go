@@ -1,3 +1,5 @@
+// +build linux
+
 package gonotify
 
 // FileEvent is the wrapper around InotifyEvent with additional Eof marker. Reading from
