@@ -104,3 +104,11 @@ type FileEvent struct {
 	InotifyEvent
 	Eof bool
 }
+
+func (f FileEvent) GoString() string {
+	return fmt.Sprintf("gonotify.FileEvent{InotifyEvent=%#v, Eof=%#v}", f.InotifyEvent, f.Eof)
+}
+
+func (f FileEvent) String() string {
+	return fmt.Sprintf("{InotifyEvent=%s, Eof=%v}", f.InotifyEvent, f.Eof)
+}

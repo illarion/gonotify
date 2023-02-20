@@ -62,14 +62,13 @@ func TestDirWatcher(t *testing.T) {
 		e := <-dw.C
 
 		if e.Eof {
-			t.Fail()
+			t.Errorf("EOF event received: %v", e)
 		}
 
 		if e.Name != filepath.Join(dir, "subfolder", "f1") {
-			t.Fail()
+			t.Errorf("Wrong event received: %v", e)
 		}
 
-		// there should be no duplicate
 		select {
 		case e := <-dw.C:
 			if !e.Eof {

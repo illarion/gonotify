@@ -5,6 +5,7 @@ package gonotify
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"path/filepath"
 	"strings"
@@ -13,6 +14,8 @@ import (
 	"time"
 	"unsafe"
 )
+
+var TimeoutError = errors.New("Inotify timeout")
 
 // Inotify is the low level wrapper around inotify_init(), inotify_add_watch() and inotify_rm_watch()
 type Inotify struct {
@@ -101,26 +104,70 @@ func (i *Inotify) RmWatch(pathName string) error {
 	return nil
 }
 
-// Read reads portion of InotifyEvents and may fail with an error
+// Read reads portion of InotifyEvents and may fail with an error. If no events are available, it will
+// wait forever, until context is cancelled.
 func (i *Inotify) Read() ([]InotifyEvent, error) {
+	for {
+		evts, err := i.ReadDeadline(time.Now().Add(time.Millisecond * 200))
+		if err != nil {
+			if err == TimeoutError {
+				continue
+			}
+			return evts, err
+		}
+		if len(evts) > 0 {
+			return evts, nil
+		}
+	}
+}
+
+// ReadDeadline waits for InotifyEvents until deadline is reached, or context is cancelled. If
+// deadline is reached, TimeoutError is returned.
+func (i *Inotify) ReadDeadline(deadline time.Time) ([]InotifyEvent, error) {
 	events := make([]InotifyEvent, 0, 1024)
 	buf := make([]byte, 1024*(syscall.SizeofInotifyEvent+16))
 
 	var n int
 	var err error
 
+	fdset := &syscall.FdSet{}
+	fdset.Bits[0] = 1 << uint(i.fd)
+
 	for {
 		if i.ctx.Err() != nil {
 			return events, i.ctx.Err()
 		}
-		n, err = syscall.Read(i.fd, buf)
+
+		now := time.Now()
+
+		if now.After(deadline) {
+			return events, TimeoutError
+		}
+
+		diff := deadline.Sub(now)
+
+		timeout := syscall.NsecToTimeval(diff.Nanoseconds())
+
+		_, err = syscall.Select(i.fd+1, fdset, nil, nil, &timeout)
+
 		if err != nil {
+			if err == syscall.EINTR {
+				continue
+			}
 			return events, err
 		}
+
+		n, err = syscall.Read(i.fd, buf)
+		if err != nil {
+			if err == syscall.EAGAIN {
+				continue
+			}
+			return events, err
+		}
+
 		if n > 0 {
 			break
 		}
-		time.Sleep(500 * time.Millisecond)
 	}
 
 	if n < syscall.SizeofInotifyEvent {
@@ -149,7 +196,6 @@ func (i *Inotify) Read() ([]InotifyEvent, error) {
 	return events, nil
 }
 
-// Close should be called when inotify is no longer needed in order to cleanup used resources.
 func (i *Inotify) close() {
 	i.m.Lock()
 	defer i.m.Unlock()
