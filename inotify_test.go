@@ -1,73 +1,80 @@
 package gonotify
 
 import (
+	"context"
 	"fmt"
 	"io/ioutil"
 	"os"
 	"path/filepath"
-	"sync"
+	"runtime/pprof"
 	"testing"
+	"time"
 )
 
 func TestOpenClose(t *testing.T) {
-	i, err := NewInotify()
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	_, err := NewInotify(ctx)
 	if err != nil {
 		t.Error(err)
-	}
-
-	err = i.Close()
-	if err != nil {
-		t.Error(err)
-	}
-
-	err = i.Close()
-	if err == nil {
-		t.Fail()
 	}
 }
 
 func TestReadFromClosed(t *testing.T) {
-	i, err := NewInotify()
+
+	ctx, cancel := context.WithCancel(context.Background())
+
+	i, err := NewInotify(ctx)
 	if err != nil {
 		t.Error(err)
 	}
 
-	wg := sync.WaitGroup{}
-	wg.Add(1)
+	exp := make(chan struct{})
 
 	go func() {
 		evt, err := i.Read()
 
 		if err == nil {
-			wg.Done()
-			t.Fail()
+			close(exp)
+			t.Error("Expected error from closed inotify.Read")
 			return
 		}
 
 		if len(evt) != 0 {
-			wg.Done()
-			t.Fail()
+			close(exp)
+			t.Error("Expected no events from closed inotify.Read")
 			return
 		}
 
-		wg.Done()
+		close(exp)
 	}()
 
-	i.Close()
-	wg.Wait()
+	time.Sleep(200 * time.Millisecond)
+	cancel()
+
+	select {
+	case <-exp:
+		return
+	case <-time.After(1 * time.Second):
+		pprof.Lookup("goroutine").WriteTo(os.Stdout, 1)
+		t.Error("Cancelling context did not close inotify.Read")
+	}
 }
 
 func BenchmarkWatch(b *testing.B) {
 	for x := 0; x < b.N; x++ {
-		i, err := NewInotify()
+		ctx, cancel := context.WithCancel(context.Background())
+		_, err := NewInotify(ctx)
 		if err != nil {
 			b.Error(err)
 		}
-		i.Close()
+		cancel()
 	}
 }
 
 func TestInotify(t *testing.T) {
+
+	ctx := context.Background()
 
 	dir, err := ioutil.TempDir("", "TestInotify")
 	if err != nil {
@@ -77,11 +84,14 @@ func TestInotify(t *testing.T) {
 	defer os.Remove(dir)
 
 	t.Run("OpenFile", func(t *testing.T) {
-		i, err := NewInotify()
+
+		ctx, cancel := context.WithCancel(ctx)
+		defer cancel()
+
+		i, err := NewInotify(ctx)
 		if err != nil {
 			t.Error(err)
 		}
-		defer i.Close()
 
 		i.AddWatch(dir, IN_ALL_EVENTS)
 
@@ -111,11 +121,13 @@ func TestInotify(t *testing.T) {
 	})
 
 	t.Run("MultipleEvents", func(t *testing.T) {
-		i, err := NewInotify()
+		ctx, cancel := context.WithCancel(ctx)
+		defer cancel()
+
+		i, err := NewInotify(ctx)
 		if err != nil {
 			t.Error(err)
 		}
-		defer i.Close()
 
 		i.AddWatch(dir, IN_CLOSE_WRITE)
 
@@ -149,11 +161,13 @@ func TestInotify(t *testing.T) {
 	})
 
 	t.Run("SelfFolderEvent", func(t *testing.T) {
-		i, err := NewInotify()
+		ctx, cancel := context.WithCancel(ctx)
+		defer cancel()
+
+		i, err := NewInotify(ctx)
 		if err != nil {
 			t.Error(err)
 		}
-		defer i.Close()
 
 		subdir := filepath.Join(dir, "subdir")
 		err = os.Mkdir(subdir, os.ModePerm)
@@ -184,12 +198,14 @@ func TestInotify(t *testing.T) {
 	})
 
 	t.Run("Bug #2 Inotify.Read() discards solo events", func(t *testing.T) {
-		i, err := NewInotify()
+		ctx, cancel := context.WithCancel(ctx)
+		defer cancel()
+
+		i, err := NewInotify(ctx)
 
 		if err != nil {
 			t.Error(err)
 		}
-		defer i.Close()
 
 		subdir := filepath.Join(dir, "subdir#2_1")
 		err = os.Mkdir(subdir, os.ModePerm)
@@ -221,12 +237,14 @@ func TestInotify(t *testing.T) {
 	})
 
 	t.Run("Bug #2 Inotify.Read() discards solo events (case 2)", func(t *testing.T) {
-		i, err := NewInotify()
+		ctx, cancel := context.WithCancel(ctx)
+		defer cancel()
+
+		i, err := NewInotify(ctx)
 
 		if err != nil {
 			t.Error(err)
 		}
-		defer i.Close()
 
 		subdir := filepath.Join(dir, "subdir#2_2")
 		err = os.Mkdir(subdir, os.ModePerm)

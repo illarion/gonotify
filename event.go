@@ -1,3 +1,4 @@
+//go:build linux
 // +build linux
 
 package gonotify
@@ -90,11 +91,11 @@ type InotifyEvent struct {
 }
 
 func (i InotifyEvent) GoString() string {
-	return fmt.Sprintf("gonotify.InotifyEvent{Wd=%#v, Name=%s, Cookie=%#v, Mask=%#v=%s", i.Wd, i.Name, i.Cookie, i.Mask, InMaskToString(i.Mask))
+	return fmt.Sprintf("gonotify.InotifyEvent{Wd=%#v, Name=%s, Cookie=%#v, Mask=%#v=%s}", i.Wd, i.Name, i.Cookie, i.Mask, InMaskToString(i.Mask))
 }
 
 func (i InotifyEvent) String() string {
-	return fmt.Sprintf("{Wd=%d, Name=%s, Cookie=%d, Mask=%s", i.Wd, i.Name, i.Cookie, InMaskToString(i.Mask))
+	return fmt.Sprintf("{Wd=%d, Name=%s, Cookie=%d, Mask=%s}", i.Wd, i.Name, i.Cookie, InMaskToString(i.Mask))
 }
 
 // FileEvent is the wrapper around InotifyEvent with additional Eof marker. Reading from

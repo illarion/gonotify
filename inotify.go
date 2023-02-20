@@ -1,40 +1,49 @@
+//go:build linux
 // +build linux
 
 package gonotify
 
 import (
+	"context"
 	"fmt"
-	"os"
 	"path/filepath"
 	"strings"
 	"sync"
 	"syscall"
+	"time"
 	"unsafe"
 )
 
 // Inotify is the low level wrapper around inotify_init(), inotify_add_watch() and inotify_rm_watch()
 type Inotify struct {
+	ctx      context.Context
 	m        sync.Mutex
 	fd       int
-	f        *os.File
 	watches  map[string]uint32
 	rwatches map[uint32]string
 }
 
 // NewInotify creates new inotify instance
-func NewInotify() (*Inotify, error) {
-	fd, err := syscall.InotifyInit1(syscall.IN_CLOEXEC)
+func NewInotify(ctx context.Context) (*Inotify, error) {
+	fd, err := syscall.InotifyInit1(syscall.IN_CLOEXEC | syscall.IN_NONBLOCK)
 
 	if err != nil {
 		return nil, err
 	}
 
-	return &Inotify{
+	inotify := &Inotify{
+		ctx:      ctx,
 		fd:       fd,
-		f:        os.NewFile(uintptr(fd), ""),
 		watches:  make(map[string]uint32),
 		rwatches: make(map[uint32]string),
-	}, nil
+	}
+
+	go func() {
+		<-ctx.Done()
+		inotify.close()
+	}()
+
+	return inotify, nil
 }
 
 // AddWatch adds given path to list of watched files / folders
@@ -97,10 +106,21 @@ func (i *Inotify) Read() ([]InotifyEvent, error) {
 	events := make([]InotifyEvent, 0, 1024)
 	buf := make([]byte, 1024*(syscall.SizeofInotifyEvent+16))
 
-	n, err := i.f.Read(buf)
+	var n int
+	var err error
 
-	if err != nil {
-		return events, err
+	for {
+		if i.ctx.Err() != nil {
+			return events, i.ctx.Err()
+		}
+		n, err = syscall.Read(i.fd, buf)
+		if err != nil {
+			return events, err
+		}
+		if n > 0 {
+			break
+		}
+		time.Sleep(500 * time.Millisecond)
 	}
 
 	if n < syscall.SizeofInotifyEvent {
@@ -130,15 +150,15 @@ func (i *Inotify) Read() ([]InotifyEvent, error) {
 }
 
 // Close should be called when inotify is no longer needed in order to cleanup used resources.
-func (i *Inotify) Close() error {
+func (i *Inotify) close() {
 	i.m.Lock()
 	defer i.m.Unlock()
 
 	for _, w := range i.watches {
 		_, err := syscall.InotifyRmWatch(i.fd, w)
 		if err != nil {
-			return err
+			continue
 		}
 	}
-	return i.f.Close()
+	syscall.Close(i.fd)
 }

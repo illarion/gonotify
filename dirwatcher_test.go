@@ -1,6 +1,7 @@
 package gonotify
 
 import (
+	"context"
 	"io/ioutil"
 	"os"
 	"path/filepath"
@@ -8,6 +9,7 @@ import (
 )
 
 func TestDirWatcher(t *testing.T) {
+	ctx := context.Background()
 
 	dir, err := ioutil.TempDir("", "TestDirWatcher")
 	if err != nil {
@@ -18,16 +20,18 @@ func TestDirWatcher(t *testing.T) {
 
 	t.Run("ExistingFile", func(t *testing.T) {
 
+		ctx, cancel := context.WithCancel(ctx)
+		defer cancel()
+
 		f, err := os.OpenFile(filepath.Join(dir, "f1"), os.O_CREATE, os.ModePerm)
 		f.Close()
 
 		defer os.Remove(filepath.Join(dir, "f1"))
 
-		dw, err := NewDirWatcher(IN_CREATE, dir)
+		dw, err := NewDirWatcher(ctx, IN_CREATE, dir)
 		if err != nil {
 			t.Error(err)
 		}
-		defer dw.Close()
 
 		e := <-dw.C
 
@@ -39,11 +43,13 @@ func TestDirWatcher(t *testing.T) {
 
 	t.Run("FileInSubdir", func(t *testing.T) {
 
-		dw, err := NewDirWatcher(IN_CREATE, dir)
+		ctx, cancel := context.WithCancel(ctx)
+		defer cancel()
+
+		dw, err := NewDirWatcher(ctx, IN_CREATE, dir)
 		if err != nil {
 			t.Error(err)
 		}
-		defer dw.Close()
 
 		err = os.Mkdir(filepath.Join(dir, "subfolder"), os.ModePerm)
 		if err != nil {
@@ -65,8 +71,10 @@ func TestDirWatcher(t *testing.T) {
 
 		// there should be no duplicate
 		select {
-		case <-dw.C:
-			t.Fail()
+		case e := <-dw.C:
+			if !e.Eof {
+				t.Fail()
+			}
 		default:
 		}
 
