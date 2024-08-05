@@ -2,6 +2,7 @@ package gonotify
 
 import (
 	"context"
+	"go.uber.org/goleak"
 	"io/ioutil"
 	"os"
 	"path/filepath"
@@ -9,6 +10,8 @@ import (
 )
 
 func TestDirWatcher(t *testing.T) {
+	defer goleak.VerifyNone(t)
+
 	ctx := context.Background()
 
 	dir, err := ioutil.TempDir("", "TestDirWatcher")
@@ -21,17 +24,19 @@ func TestDirWatcher(t *testing.T) {
 	t.Run("ExistingFile", func(t *testing.T) {
 
 		ctx, cancel := context.WithCancel(ctx)
-		defer cancel()
+		dw, err := NewDirWatcher(ctx, IN_CREATE, dir)
+		if err != nil {
+			t.Error(err)
+		}
+		defer func() {
+			cancel()
+			dw.WaitForStop()
+		}()
 
 		f, err := os.OpenFile(filepath.Join(dir, "f1"), os.O_CREATE, os.ModePerm)
 		f.Close()
 
 		defer os.Remove(filepath.Join(dir, "f1"))
-
-		dw, err := NewDirWatcher(ctx, IN_CREATE, dir)
-		if err != nil {
-			t.Error(err)
-		}
 
 		e := <-dw.C
 
@@ -44,12 +49,14 @@ func TestDirWatcher(t *testing.T) {
 	t.Run("FileInSubdir", func(t *testing.T) {
 
 		ctx, cancel := context.WithCancel(ctx)
-		defer cancel()
-
 		dw, err := NewDirWatcher(ctx, IN_CREATE, dir)
 		if err != nil {
 			t.Error(err)
 		}
+		defer func() {
+			cancel()
+			dw.WaitForStop()
+		}()
 
 		err = os.Mkdir(filepath.Join(dir, "subfolder"), os.ModePerm)
 		if err != nil {

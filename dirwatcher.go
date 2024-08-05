@@ -4,13 +4,21 @@ import (
 	"context"
 	"os"
 	"path/filepath"
+	"sync"
 )
 
 // DirWatcher recursively watches the given root folder, waiting for file events.
 // Events can be masked by providing fileMask. DirWatcher does not generate events for
 // folders or subfolders.
 type DirWatcher struct {
-	C chan FileEvent
+	C  chan FileEvent
+	wg sync.WaitGroup
+}
+
+// WaitForStop blocks until all internal resources such as goroutines have terminated.
+// Call this after cancelling the context passed to NewFileWatcher to deterministically ensure teardown is complete.
+func (d *DirWatcher) WaitForStop() {
+	d.wg.Wait()
 }
 
 // NewDirWatcher creates DirWatcher recursively waiting for events in the given root folder and
@@ -57,9 +65,16 @@ func NewDirWatcher(ctx context.Context, fileMask uint32, root string) (*DirWatch
 
 	events := make(chan FileEvent)
 
+	dw.wg.Add(1)
 	go func() {
+		defer dw.wg.Done()
+
 		for _, event := range queue {
-			events <- event
+			select {
+			case events <- event:
+			case <-ctx.Done():
+				return
+			}
 		}
 		queue = nil
 
@@ -91,11 +106,15 @@ func NewDirWatcher(ctx context.Context, fileMask uint32, root string) (*DirWatch
 
 						if !f.IsDir() {
 							// fake event, but there can be duplicates of this event provided by real watcher
-							events <- FileEvent{
+							select {
+							case events <- FileEvent{
 								InotifyEvent: InotifyEvent{
 									Name: path,
 									Mask: IN_CREATE,
 								},
+							}:
+							case <-ctx.Done():
+								return nil
 							}
 						}
 
@@ -119,24 +138,34 @@ func NewDirWatcher(ctx context.Context, fileMask uint32, root string) (*DirWatch
 					continue
 				}
 
-				events <- FileEvent{
+				select {
+				case events <- FileEvent{
 					InotifyEvent: event,
+				}:
+				case <-ctx.Done():
+					return
 				}
 			}
 		}
 	}()
 
+	dw.wg.Add(1)
 	go func() {
+		defer dw.wg.Done()
+
 		for {
 			select {
 			case <-ctx.Done():
 				return
 			case event, ok := <-events:
 				if !ok {
-					dw.C <- FileEvent{
+					select {
+					case dw.C <- FileEvent{
 						Eof: true,
+					}:
+						cancel()
+					case <-ctx.Done():
 					}
-					cancel()
 					return
 				}
 
@@ -145,7 +174,11 @@ func NewDirWatcher(ctx context.Context, fileMask uint32, root string) (*DirWatch
 					continue
 				}
 
-				dw.C <- event
+				select {
+				case dw.C <- event:
+				case <-ctx.Done():
+					return
+				}
 			}
 		}
 	}()

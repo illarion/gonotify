@@ -3,6 +3,7 @@ package gonotify
 import (
 	"context"
 	"fmt"
+	"go.uber.org/goleak"
 	"io/ioutil"
 	"os"
 	"path/filepath"
@@ -12,6 +13,8 @@ import (
 )
 
 func TestOpenClose(t *testing.T) {
+	defer goleak.VerifyNone(t)
+
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	_, err := NewInotify(ctx)
@@ -21,6 +24,7 @@ func TestOpenClose(t *testing.T) {
 }
 
 func TestReadFromClosed(t *testing.T) {
+	defer goleak.VerifyNone(t)
 
 	ctx, cancel := context.WithCancel(context.Background())
 
@@ -73,6 +77,7 @@ func BenchmarkWatch(b *testing.B) {
 }
 
 func TestInotify(t *testing.T) {
+	defer goleak.VerifyNone(t)
 
 	ctx := context.Background()
 
