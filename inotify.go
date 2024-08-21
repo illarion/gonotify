@@ -9,7 +9,6 @@ import (
 	"fmt"
 	"path/filepath"
 	"strings"
-	"sync"
 	"syscall"
 	"time"
 	"unsafe"
@@ -17,13 +16,38 @@ import (
 
 var TimeoutError = errors.New("Inotify timeout")
 
+type getWatchRequest struct {
+	pathName string
+	result   chan uint32
+}
+
+type getPathRequest struct {
+	wd     uint32
+	result chan string
+}
+
+type addWatchRequest struct {
+	pathName string
+	wd       uint32
+}
+
 // Inotify is the low level wrapper around inotify_init(), inotify_add_watch() and inotify_rm_watch()
 type Inotify struct {
-	ctx      context.Context
-	m        sync.Mutex
-	fd       int
-	watches  map[string]uint32
-	rwatches map[uint32]string
+	// ctx is the context of inotify instance
+	ctx context.Context
+	// fd is the file descriptor of inotify instance
+	fd int
+
+	// getWatchByPathIn is the channel for getting watch descriptor by path
+	getWatchByPathIn chan getWatchRequest
+	// getPathByWatchIn is the channel for getting path by watch descriptor
+	getPathByWatchIn chan getPathRequest
+	// addWatchIn is the channel for adding watch
+	addWatchIn chan addWatchRequest
+	// rmByWdIn is the channel for removing watch by watch descriptor
+	rmByWdIn chan uint32
+	// rmByPathIn is the channel for removing watch by path
+	rmByPathIn chan string
 }
 
 // NewInotify creates new inotify instance
@@ -35,15 +59,64 @@ func NewInotify(ctx context.Context) (*Inotify, error) {
 	}
 
 	inotify := &Inotify{
-		ctx:      ctx,
-		fd:       fd,
-		watches:  make(map[string]uint32),
-		rwatches: make(map[uint32]string),
+		ctx:              ctx,
+		fd:               fd,
+		getPathByWatchIn: make(chan getPathRequest),
+		getWatchByPathIn: make(chan getWatchRequest),
+		addWatchIn:       make(chan addWatchRequest),
+		rmByWdIn:         make(chan uint32),
+		rmByPathIn:       make(chan string),
 	}
 
 	go func() {
-		<-ctx.Done()
-		inotify.close()
+		watches := make(map[string]uint32)
+		paths := make(map[uint32]string)
+
+		for {
+			select {
+			case <-ctx.Done():
+				for _, w := range watches {
+					_, err := syscall.InotifyRmWatch(fd, w)
+					if err != nil {
+						continue
+					}
+				}
+				syscall.Close(fd)
+				return
+			case req := <-inotify.addWatchIn:
+				watches[req.pathName] = req.wd
+				paths[req.wd] = req.pathName
+			case req := <-inotify.getWatchByPathIn:
+				wd, ok := watches[req.pathName]
+				if !ok {
+					close(req.result)
+				}
+				req.result <- wd
+				close(req.result)
+			case req := <-inotify.getPathByWatchIn:
+				pathName, ok := paths[req.wd]
+				if !ok {
+					close(req.result)
+				}
+				req.result <- pathName
+				close(req.result)
+			case wd := <-inotify.rmByWdIn:
+				pathName, ok := paths[wd]
+				if !ok {
+					continue
+				}
+				delete(watches, pathName)
+				delete(paths, wd)
+			case pathName := <-inotify.rmByPathIn:
+				wd, ok := watches[pathName]
+				if !ok {
+					continue
+				}
+				delete(watches, pathName)
+				delete(paths, wd)
+			}
+		}
+
 	}()
 
 	return inotify, nil
@@ -57,51 +130,38 @@ func (i *Inotify) AddWatch(pathName string, mask uint32) error {
 		return err
 	}
 
-	i.m.Lock()
-	i.watches[pathName] = uint32(w)
-	i.rwatches[uint32(w)] = pathName
-	i.m.Unlock()
-	return nil
+	select {
+	case <-i.ctx.Done():
+		return i.ctx.Err()
+	case i.addWatchIn <- addWatchRequest{
+		pathName: pathName,
+		wd:       uint32(w)}:
+		return nil
+	}
+
 }
 
 // RmWd removes watch by watch descriptor
 func (i *Inotify) RmWd(wd uint32) error {
-	i.m.Lock()
-	defer i.m.Unlock()
 
-	pathName, ok := i.rwatches[wd]
-	if !ok {
+	select {
+	case <-i.ctx.Done():
+		return i.ctx.Err()
+	case i.rmByWdIn <- wd:
 		return nil
 	}
-
-	_, err := syscall.InotifyRmWatch(i.fd, wd)
-	if err != nil {
-		return err
-	}
-
-	delete(i.watches, pathName)
-	delete(i.rwatches, wd)
-	return nil
 }
 
 // RmWatch removes watch by pathName
 func (i *Inotify) RmWatch(pathName string) error {
-	i.m.Lock()
-	defer i.m.Unlock()
 
-	wd, ok := i.watches[pathName]
-	if !ok {
+	select {
+	case <-i.ctx.Done():
+		return i.ctx.Err()
+	case i.rmByPathIn <- pathName:
 		return nil
 	}
 
-	_, err := syscall.InotifyRmWatch(i.fd, wd)
-	if err != nil {
-		return err
-	}
-
-	delete(i.watches, pathName)
-	delete(i.rwatches, wd)
-	return nil
 }
 
 // Read reads portion of InotifyEvents and may fail with an error. If no events are available, it will
@@ -184,7 +244,25 @@ func (i *Inotify) ReadDeadline(deadline time.Time) ([]InotifyEvent, error) {
 		offset += syscall.SizeofInotifyEvent + int(event.Len)
 
 		name := strings.TrimRight(string(namebuf), "\x00")
-		name = filepath.Join(i.rwatches[uint32(event.Wd)], name)
+
+		req := getPathRequest{
+			wd:     uint32(event.Wd),
+			result: make(chan string),
+		}
+
+		select {
+		case <-i.ctx.Done():
+			return events, i.ctx.Err()
+		case i.getPathByWatchIn <- req:
+
+			select {
+			case <-i.ctx.Done():
+				return events, i.ctx.Err()
+			case watchName := <-req.result:
+				name = filepath.Join(watchName, name)
+			}
+		}
+
 		events = append(events, InotifyEvent{
 			Wd:     uint32(event.Wd),
 			Name:   name,
@@ -194,17 +272,4 @@ func (i *Inotify) ReadDeadline(deadline time.Time) ([]InotifyEvent, error) {
 	}
 
 	return events, nil
-}
-
-func (i *Inotify) close() {
-	i.m.Lock()
-	defer i.m.Unlock()
-
-	for _, w := range i.watches {
-		_, err := syscall.InotifyRmWatch(i.fd, w)
-		if err != nil {
-			continue
-		}
-	}
-	syscall.Close(i.fd)
 }
