@@ -53,7 +53,6 @@ type Inotify struct {
 // NewInotify creates new inotify instance
 func NewInotify(ctx context.Context) (*Inotify, error) {
 	fd, err := syscall.InotifyInit1(syscall.IN_CLOEXEC | syscall.IN_NONBLOCK)
-
 	if err != nil {
 		return nil, err
 	}
@@ -88,17 +87,15 @@ func NewInotify(ctx context.Context) (*Inotify, error) {
 				paths[req.wd] = req.pathName
 			case req := <-inotify.getWatchByPathIn:
 				wd, ok := watches[req.pathName]
-				if !ok {
-					close(req.result)
+				if ok {
+					req.result <- wd
 				}
-				req.result <- wd
 				close(req.result)
 			case req := <-inotify.getPathByWatchIn:
 				pathName, ok := paths[req.wd]
-				if !ok {
-					close(req.result)
+				if ok {
+					req.result <- pathName
 				}
-				req.result <- pathName
 				close(req.result)
 			case wd := <-inotify.rmByWdIn:
 				pathName, ok := paths[wd]
@@ -116,7 +113,6 @@ func NewInotify(ctx context.Context) (*Inotify, error) {
 				delete(paths, wd)
 			}
 		}
-
 	}()
 
 	return inotify, nil
@@ -125,7 +121,6 @@ func NewInotify(ctx context.Context) (*Inotify, error) {
 // AddWatch adds given path to list of watched files / folders
 func (i *Inotify) AddWatch(pathName string, mask uint32) error {
 	w, err := syscall.InotifyAddWatch(i.fd, pathName, mask)
-
 	if err != nil {
 		return err
 	}
@@ -135,15 +130,14 @@ func (i *Inotify) AddWatch(pathName string, mask uint32) error {
 		return i.ctx.Err()
 	case i.addWatchIn <- addWatchRequest{
 		pathName: pathName,
-		wd:       uint32(w)}:
+		wd:       uint32(w),
+	}:
 		return nil
 	}
-
 }
 
 // RmWd removes watch by watch descriptor
 func (i *Inotify) RmWd(wd uint32) error {
-
 	select {
 	case <-i.ctx.Done():
 		return i.ctx.Err()
@@ -154,14 +148,12 @@ func (i *Inotify) RmWd(wd uint32) error {
 
 // RmWatch removes watch by pathName
 func (i *Inotify) RmWatch(pathName string) error {
-
 	select {
 	case <-i.ctx.Done():
 		return i.ctx.Err()
 	case i.rmByPathIn <- pathName:
 		return nil
 	}
-
 }
 
 // Read reads portion of InotifyEvents and may fail with an error. If no events are available, it will
@@ -209,7 +201,6 @@ func (i *Inotify) ReadDeadline(deadline time.Time) ([]InotifyEvent, error) {
 		timeout := syscall.NsecToTimeval(diff.Nanoseconds())
 
 		_, err = syscall.Select(i.fd+1, fdset, nil, nil, &timeout)
-
 		if err != nil {
 			if err == syscall.EINTR {
 				continue
