@@ -40,6 +40,7 @@ func NewFileWatcher(ctx context.Context, mask uint32, files ...string) (*FileWat
 	events := make(chan FileEvent)
 
 	go func() {
+		defer cancel()
 		for {
 			raw, err := inotify.Read()
 
@@ -61,6 +62,7 @@ func NewFileWatcher(ctx context.Context, mask uint32, files ...string) (*FileWat
 	}()
 
 	go func() {
+		defer cancel()
 		for {
 			select {
 			case <-ctx.Done():

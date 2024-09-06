@@ -7,6 +7,8 @@ import (
 	"os"
 	"path/filepath"
 	"runtime/pprof"
+	"strings"
+	"syscall"
 	"testing"
 	"time"
 )
@@ -158,6 +160,53 @@ func TestInotify(t *testing.T) {
 
 			t.Logf("%#v", event)
 		}
+	})
+
+	// This test should generate more events than the buffer passed to syscall.Read()
+	// can handle. This is to test the buffer handling in the ReadDeadline() method.
+	// The potential bug is that the buffer may contain patial event at the end of the buffer
+	// and the next syscall.Read() will not be able to read the rest of the event.
+	t.Run("MultipleEvents #2 - Reading leftover events", func(t *testing.T) {
+		ctx, cancel := context.WithCancel(ctx)
+		defer cancel()
+
+		i, err := NewInotify(ctx)
+		if err != nil {
+			t.Error(err)
+		}
+
+		i.AddWatch(dir, IN_CLOSE_WRITE)
+
+		// generate 2* maxEvents events with long filenames (in range from syscall.NAME_MAX-10 to syscall.NAME_MAX)
+		for x := 0; x < 2*maxEvents; x++ {
+			fileNameLen := syscall.NAME_MAX - 10 + x%10
+			// make a filename with len = fileNameLen
+			fileName := fmt.Sprintf("%s-%d", "hz", x)
+			fileName = fmt.Sprintf("%s%s", fileName, strings.Repeat("a", fileNameLen-len(fileName)+1))
+
+			f, err := os.OpenFile(filepath.Join(dir, fileName), os.O_RDWR|os.O_CREATE, 0)
+			if err != nil {
+				t.Error(err)
+			}
+			f.Close()
+		}
+
+		// read all events
+		events, err := i.Read()
+		if err != nil {
+			t.Error(err)
+		}
+
+		events2, err := i.Read()
+		if err != nil {
+			t.Error(err)
+		}
+
+		// check if all events were read
+		if len(events)+len(events2) != 2*maxEvents {
+			t.Errorf("Expected %d events, but got %d", 2*maxEvents, len(events))
+		}
+
 	})
 
 	t.Run("SelfFolderEvent", func(t *testing.T) {

@@ -24,6 +24,7 @@ func NewDirWatcher(ctx context.Context, fileMask uint32, root string) (*DirWatch
 
 	i, err := NewInotify(ctx)
 	if err != nil {
+		cancel()
 		return nil, err
 	}
 

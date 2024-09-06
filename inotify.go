@@ -14,6 +14,9 @@ import (
 	"unsafe"
 )
 
+// max number of events to read at once
+const maxEvents = 1024
+
 var TimeoutError = errors.New("Inotify timeout")
 
 type getWatchRequest struct {
@@ -184,15 +187,15 @@ func (i *Inotify) Read() ([]InotifyEvent, error) {
 // ReadDeadline waits for InotifyEvents until deadline is reached, or context is cancelled. If
 // deadline is reached, TimeoutError is returned.
 func (i *Inotify) ReadDeadline(deadline time.Time) ([]InotifyEvent, error) {
-	events := make([]InotifyEvent, 0, 1024)
-	buf := make([]byte, 1024*(syscall.SizeofInotifyEvent+16))
+	events := make([]InotifyEvent, 0, maxEvents)
+	buf := make([]byte, maxEvents*(syscall.SizeofInotifyEvent+syscall.NAME_MAX+1))
 
 	var n int
 	var err error
 
 	fdset := &syscall.FdSet{}
-	fdset.Bits[0] = 1 << uint(i.fd)
 
+	//main:
 	for {
 		if i.ctx.Err() != nil {
 			return events, i.ctx.Err()
@@ -208,6 +211,7 @@ func (i *Inotify) ReadDeadline(deadline time.Time) ([]InotifyEvent, error) {
 
 		timeout := syscall.NsecToTimeval(diff.Nanoseconds())
 
+		fdset.Bits[0] = 1 << uint(i.fd)
 		_, err = syscall.Select(i.fd+1, fdset, nil, nil, &timeout)
 
 		if err != nil {
@@ -215,6 +219,10 @@ func (i *Inotify) ReadDeadline(deadline time.Time) ([]InotifyEvent, error) {
 				continue
 			}
 			return events, err
+		}
+
+		if fdset.Bits[0]&(1<<uint(i.fd)) == 0 {
+			continue // No data to read, continue waiting
 		}
 
 		n, err = syscall.Read(i.fd, buf)
@@ -231,7 +239,7 @@ func (i *Inotify) ReadDeadline(deadline time.Time) ([]InotifyEvent, error) {
 	}
 
 	if n < syscall.SizeofInotifyEvent {
-		return events, fmt.Errorf("Short inotify read")
+		return events, fmt.Errorf("short inotify read, expected at least one SizeofInotifyEvent %d, got %d", syscall.SizeofInotifyEvent, n)
 	}
 
 	offset := 0
@@ -239,11 +247,18 @@ func (i *Inotify) ReadDeadline(deadline time.Time) ([]InotifyEvent, error) {
 	for offset+syscall.SizeofInotifyEvent <= n {
 
 		event := (*syscall.InotifyEvent)(unsafe.Pointer(&buf[offset]))
-		namebuf := buf[offset+syscall.SizeofInotifyEvent : offset+syscall.SizeofInotifyEvent+int(event.Len)]
+		var name string
+		{
+			nameStart := offset + syscall.SizeofInotifyEvent
+			nameEnd := offset + syscall.SizeofInotifyEvent + int(event.Len)
 
-		offset += syscall.SizeofInotifyEvent + int(event.Len)
+			if nameEnd > n {
+				return events, fmt.Errorf("corrupted inotify event length %d", event.Len)
+			}
 
-		name := strings.TrimRight(string(namebuf), "\x00")
+			name = strings.TrimRight(string(buf[nameStart:nameEnd]), "\x00")
+			offset = nameEnd
+		}
 
 		req := getPathRequest{
 			wd:     uint32(event.Wd),
