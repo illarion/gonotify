@@ -10,17 +10,18 @@ import (
 // Events can be masked by providing fileMask. DirWatcher does not generate events for
 // folders or subfolders.
 type DirWatcher struct {
+	context.Context
 	C chan FileEvent
 }
 
 // NewDirWatcher creates DirWatcher recursively waiting for events in the given root folder and
 // emitting FileEvents in channel C, that correspond to fileMask. Folder events are ignored (having IN_ISDIR set to 1)
 func NewDirWatcher(ctx context.Context, fileMask uint32, root string) (*DirWatcher, error) {
-	dw := &DirWatcher{
-		C: make(chan FileEvent),
-	}
-
 	ctx, cancel := context.WithCancel(ctx)
+	dw := &DirWatcher{
+		Context: ctx,
+		C:       make(chan FileEvent),
+	}
 
 	i, err := NewInotify(ctx)
 	if err != nil {
@@ -59,6 +60,7 @@ func NewDirWatcher(ctx context.Context, fileMask uint32, root string) (*DirWatch
 	events := make(chan FileEvent)
 
 	go func() {
+		defer cancel()
 		for _, event := range queue {
 			events <- event
 		}

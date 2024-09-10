@@ -61,4 +61,23 @@ func TestFileWatcher(t *testing.T) {
 
 	})
 
+	t.Run("ClosedFileWatcherHasClosedChannel", func(t *testing.T) {
+		ctx, cancel := context.WithCancel(ctx)
+		defer cancel()
+
+		fw, err := NewFileWatcher(ctx, IN_ALL_EVENTS, filepath.Join(dir, "foo"))
+		if err != nil {
+			t.Error(err)
+		}
+
+		cancel()
+
+		select {
+		case <-fw.Done():
+		default:
+			t.Fail()
+		}
+
+	})
+
 }

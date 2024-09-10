@@ -78,4 +78,22 @@ func TestDirWatcher(t *testing.T) {
 		}
 
 	})
+
+	t.Run("ClosedDirwatcherHasDoneContext", func(t *testing.T) {
+		ctx, cancel := context.WithCancel(ctx)
+		defer cancel()
+
+		dw, err := NewDirWatcher(ctx, IN_CREATE, dir)
+		if err != nil {
+			t.Error(err)
+		}
+
+		cancel()
+
+		select {
+		case <-dw.Context.Done():
+		default:
+			t.Fail()
+		}
+	})
 }
