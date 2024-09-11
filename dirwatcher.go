@@ -4,28 +4,27 @@ import (
 	"context"
 	"os"
 	"path/filepath"
+	"sync"
 )
 
 // DirWatcher recursively watches the given root folder, waiting for file events.
 // Events can be masked by providing fileMask. DirWatcher does not generate events for
 // folders or subfolders.
 type DirWatcher struct {
-	context.Context
-	C chan FileEvent
+	C    chan FileEvent
+	done chan struct{}
 }
 
 // NewDirWatcher creates DirWatcher recursively waiting for events in the given root folder and
 // emitting FileEvents in channel C, that correspond to fileMask. Folder events are ignored (having IN_ISDIR set to 1)
 func NewDirWatcher(ctx context.Context, fileMask uint32, root string) (*DirWatcher, error) {
-	ctx, cancel := context.WithCancel(ctx)
 	dw := &DirWatcher{
-		Context: ctx,
-		C:       make(chan FileEvent),
+		C:    make(chan FileEvent),
+		done: make(chan struct{}),
 	}
 
 	i, err := NewInotify(ctx)
 	if err != nil {
-		cancel()
 		return nil, err
 	}
 
@@ -53,20 +52,35 @@ func NewDirWatcher(ctx context.Context, fileMask uint32, root string) (*DirWatch
 	})
 
 	if err != nil {
-		cancel()
 		return nil, err
 	}
 
 	events := make(chan FileEvent)
 
+	wg := sync.WaitGroup{}
+	wg.Add(1)
 	go func() {
-		defer cancel()
+		defer wg.Done()
+
 		for _, event := range queue {
-			events <- event
+			select {
+			case <-ctx.Done():
+				close(events)
+				return
+			case events <- event:
+
+			}
 		}
 		queue = nil
 
 		for {
+
+			select {
+			case <-ctx.Done():
+				close(events)
+				return
+			default:
+			}
 
 			raw, err := i.Read()
 			if err != nil {
@@ -129,7 +143,11 @@ func NewDirWatcher(ctx context.Context, fileMask uint32, root string) (*DirWatch
 		}
 	}()
 
+	wg.Add(1)
 	go func() {
+		defer wg.Done()
+		defer close(dw.C)
+
 		for {
 			select {
 			case <-ctx.Done():
@@ -139,7 +157,6 @@ func NewDirWatcher(ctx context.Context, fileMask uint32, root string) (*DirWatch
 					dw.C <- FileEvent{
 						Eof: true,
 					}
-					cancel()
 					return
 				}
 
@@ -153,6 +170,15 @@ func NewDirWatcher(ctx context.Context, fileMask uint32, root string) (*DirWatch
 		}
 	}()
 
-	return dw, nil
+	go func() {
+		wg.Wait()
+		close(dw.done)
+	}()
 
+	return dw, nil
+}
+
+// Done returns a channel that is closed when DirWatcher is done
+func (dw *DirWatcher) Done() <-chan struct{} {
+	return dw.done
 }

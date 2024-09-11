@@ -6,6 +6,7 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
+	"time"
 )
 
 func TestFileWatcher(t *testing.T) {
@@ -70,11 +71,17 @@ func TestFileWatcher(t *testing.T) {
 			t.Error(err)
 		}
 
+		go func() {
+			for e := range fw.C {
+				t.Logf("Event received: %v", e)
+			}
+		}()
+
 		cancel()
 
 		select {
 		case <-fw.Done():
-		default:
+		case <-time.After(5 * time.Second):
 			t.Fail()
 		}
 

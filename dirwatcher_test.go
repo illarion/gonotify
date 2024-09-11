@@ -6,6 +6,7 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
+	"time"
 )
 
 func TestDirWatcher(t *testing.T) {
@@ -79,7 +80,7 @@ func TestDirWatcher(t *testing.T) {
 
 	})
 
-	t.Run("ClosedDirwatcherHasDoneContext", func(t *testing.T) {
+	t.Run("ClosedDirwatcherBecomesDone", func(t *testing.T) {
 		ctx, cancel := context.WithCancel(ctx)
 		defer cancel()
 
@@ -88,11 +89,17 @@ func TestDirWatcher(t *testing.T) {
 			t.Error(err)
 		}
 
+		go func() {
+			for e := range dw.C {
+				t.Logf("Event received: %v", e)
+			}
+		}()
+
 		cancel()
 
 		select {
-		case <-dw.Context.Done():
-		default:
+		case <-dw.Done():
+		case <-time.After(5 * time.Second):
 			t.Fail()
 		}
 	})
