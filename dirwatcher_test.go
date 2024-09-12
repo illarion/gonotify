@@ -5,6 +5,7 @@ import (
 	"io/ioutil"
 	"os"
 	"path/filepath"
+	"sync"
 	"testing"
 	"time"
 )
@@ -89,7 +90,12 @@ func TestDirWatcher(t *testing.T) {
 			t.Error(err)
 		}
 
+		var wg sync.WaitGroup
+		defer wg.Wait()
+
+		wg.Add(1)
 		go func() {
+			defer wg.Done()
 			for e := range dw.C {
 				t.Logf("Event received: %v", e)
 			}
