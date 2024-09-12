@@ -96,6 +96,7 @@ func NewFileWatcher(ctx context.Context, mask uint32, files ...string) (*FileWat
 	}()
 
 	go func() {
+		<-inotify.Done()
 		wg.Wait()
 		close(f.done)
 	}()

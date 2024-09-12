@@ -41,6 +41,9 @@ type Inotify struct {
 	// fd is the file descriptor of inotify instance
 	fd int
 
+	// done channel is closed when the instance has completed
+	done chan struct{}
+
 	// getWatchByPathIn is the channel for getting watch descriptor by path
 	getWatchByPathIn chan getWatchRequest
 	// getPathByWatchIn is the channel for getting path by watch descriptor
@@ -62,6 +65,7 @@ func NewInotify(ctx context.Context) (*Inotify, error) {
 
 	inotify := &Inotify{
 		ctx:              ctx,
+		done:             make(chan struct{}),
 		fd:               fd,
 		getPathByWatchIn: make(chan getPathRequest),
 		getWatchByPathIn: make(chan getWatchRequest),
@@ -71,6 +75,8 @@ func NewInotify(ctx context.Context) (*Inotify, error) {
 	}
 
 	go func() {
+		defer close(inotify.done)
+
 		watches := make(map[string]uint32)
 		paths := make(map[uint32]string)
 
@@ -119,6 +125,11 @@ func NewInotify(ctx context.Context) (*Inotify, error) {
 	}()
 
 	return inotify, nil
+}
+
+// Done returns a channel that is closed when Inotify is done
+func (i *Inotify) Done() <-chan struct{} {
+	return i.done
 }
 
 // AddWatch adds given path to list of watched files / folders

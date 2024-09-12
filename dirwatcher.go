@@ -171,6 +171,7 @@ func NewDirWatcher(ctx context.Context, fileMask uint32, root string) (*DirWatch
 	}()
 
 	go func() {
+		<-i.Done()
 		wg.Wait()
 		close(dw.done)
 	}()
