@@ -108,11 +108,15 @@ func NewDirWatcher(ctx context.Context, fileMask uint32, root string) (*DirWatch
 
 						if !f.IsDir() {
 							// fake event, but there can be duplicates of this event provided by real watcher
-							events <- FileEvent{
+							select {
+							case <-ctx.Done():
+								return nil
+							case events <- FileEvent{
 								InotifyEvent: InotifyEvent{
 									Name: path,
 									Mask: IN_CREATE,
 								},
+							}: //noop
 							}
 						}
 
@@ -136,8 +140,12 @@ func NewDirWatcher(ctx context.Context, fileMask uint32, root string) (*DirWatch
 					continue
 				}
 
-				events <- FileEvent{
+				select {
+				case <-ctx.Done():
+					return
+				case events <- FileEvent{
 					InotifyEvent: event,
+				}: //noop
 				}
 			}
 		}
@@ -151,11 +159,25 @@ func NewDirWatcher(ctx context.Context, fileMask uint32, root string) (*DirWatch
 		for {
 			select {
 			case <-ctx.Done():
+				// drain events
+				for {
+					select {
+					case _, ok := <-events:
+						if !ok {
+							return
+						}
+					default:
+						return
+					}
+				}
 				return
 			case event, ok := <-events:
 				if !ok {
-					dw.C <- FileEvent{
+					select {
+					case <-ctx.Done():
+					case dw.C <- FileEvent{
 						Eof: true,
+					}:
 					}
 					return
 				}
@@ -165,7 +187,11 @@ func NewDirWatcher(ctx context.Context, fileMask uint32, root string) (*DirWatch
 					continue
 				}
 
-				dw.C <- event
+				select {
+				case dw.C <- event:
+				case <-ctx.Done():
+					return
+				}
 			}
 		}
 	}()

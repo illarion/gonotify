@@ -44,8 +44,6 @@ type Inotify struct {
 	// done channel is closed when the instance has completed
 	done chan struct{}
 
-	// getWatchByPathIn is the channel for getting watch descriptor by path
-	getWatchByPathIn chan getWatchRequest
 	// getPathByWatchIn is the channel for getting path by watch descriptor
 	getPathByWatchIn chan getPathRequest
 	// addWatchIn is the channel for adding watch
@@ -68,7 +66,6 @@ func NewInotify(ctx context.Context) (*Inotify, error) {
 		done:             make(chan struct{}),
 		fd:               fd,
 		getPathByWatchIn: make(chan getPathRequest),
-		getWatchByPathIn: make(chan getWatchRequest),
 		addWatchIn:       make(chan addWatchRequest),
 		rmByWdIn:         make(chan uint32),
 		rmByPathIn:       make(chan string),
@@ -94,12 +91,6 @@ func NewInotify(ctx context.Context) (*Inotify, error) {
 			case req := <-inotify.addWatchIn:
 				watches[req.pathName] = req.wd
 				paths[req.wd] = req.pathName
-			case req := <-inotify.getWatchByPathIn:
-				wd, ok := watches[req.pathName]
-				if ok {
-					req.result <- wd
-				}
-				close(req.result)
 			case req := <-inotify.getPathByWatchIn:
 				pathName, ok := paths[req.wd]
 				if ok {
@@ -274,6 +265,12 @@ func (i *Inotify) ReadDeadline(deadline time.Time) ([]InotifyEvent, error) {
 
 			select {
 			case <-i.ctx.Done():
+
+				// drain result channel
+				for range req.result {
+					// noop
+				}
+
 				return events, i.ctx.Err()
 			case watchName := <-req.result:
 				name = filepath.Join(watchName, name)

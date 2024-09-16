@@ -80,8 +80,9 @@ func NewFileWatcher(ctx context.Context, mask uint32, files ...string) (*FileWat
 			case event, ok := <-events:
 
 				if !ok {
-					f.C <- FileEvent{
-						Eof: true,
+					select {
+					case <-ctx.Done():
+					case f.C <- FileEvent{Eof: true}:
 					}
 					return
 				}
@@ -90,7 +91,11 @@ func NewFileWatcher(ctx context.Context, mask uint32, files ...string) (*FileWat
 					continue
 				}
 
-				f.C <- event
+				select {
+				case <-ctx.Done():
+					return
+				case f.C <- event:
+				}
 			}
 		}
 	}()
