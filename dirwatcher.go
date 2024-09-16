@@ -88,6 +88,13 @@ func NewDirWatcher(ctx context.Context, fileMask uint32, root string) (*DirWatch
 				return
 			}
 
+			select {
+			case <-ctx.Done():
+				close(events)
+				return
+			default:
+			}
+
 			for _, event := range raw {
 
 				// Skip ignored events queued from removed watchers
@@ -170,7 +177,6 @@ func NewDirWatcher(ctx context.Context, fileMask uint32, root string) (*DirWatch
 						return
 					}
 				}
-				return
 			case event, ok := <-events:
 				if !ok {
 					select {
@@ -197,8 +203,8 @@ func NewDirWatcher(ctx context.Context, fileMask uint32, root string) (*DirWatch
 	}()
 
 	go func() {
-		<-i.Done()
 		wg.Wait()
+		<-i.Done()
 		close(dw.done)
 	}()
 
