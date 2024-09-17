@@ -23,7 +23,7 @@ func TestFileWatcher(t *testing.T) {
 
 	t.Run("Simple", func(t *testing.T) {
 
-		ctx, cancel := context.WithCancel(ctx)
+		ctx, cancel := context.WithTimeout(ctx, 5*time.Second)
 		defer cancel()
 
 		f1 := filepath.Join(dir, "/dir1/foo")
@@ -79,7 +79,7 @@ func TestFileWatcher(t *testing.T) {
 
 	t.Run("ClosedFileWatcherWithNotConsumedEvents", func(t *testing.T) {
 
-		ctx, cancel := context.WithCancel(ctx)
+		ctx, cancel := context.WithTimeout(ctx, 5*time.Second)
 		defer cancel()
 
 		f1 := filepath.Join(dir, "/dir1/foo1")
@@ -128,7 +128,7 @@ func TestFileWatcher(t *testing.T) {
 	})
 
 	t.Run("ClosedFileWatcherHasClosedChannel", func(t *testing.T) {
-		ctx, cancel := context.WithCancel(ctx)
+		ctx, cancel := context.WithTimeout(ctx, 5*time.Second)
 		defer cancel()
 
 		fw, err := NewFileWatcher(ctx, IN_ALL_EVENTS, filepath.Join(dir, "foo"))

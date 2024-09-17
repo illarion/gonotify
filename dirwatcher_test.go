@@ -23,7 +23,7 @@ func TestDirWatcher(t *testing.T) {
 
 	t.Run("ExistingFile", func(t *testing.T) {
 
-		ctx, cancel := context.WithCancel(ctx)
+		ctx, cancel := context.WithTimeout(ctx, 5*time.Second)
 		defer cancel()
 
 		f, err := os.OpenFile(filepath.Join(dir, "f1"), os.O_CREATE, os.ModePerm)
@@ -59,7 +59,7 @@ func TestDirWatcher(t *testing.T) {
 
 	t.Run("FileInSubdir", func(t *testing.T) {
 
-		ctx, cancel := context.WithCancel(ctx)
+		ctx, cancel := context.WithTimeout(ctx, 5*time.Second)
 		defer cancel()
 
 		dw, err := NewDirWatcher(ctx, IN_CREATE, dir)
@@ -111,7 +111,7 @@ func TestDirWatcher(t *testing.T) {
 
 	t.Run("ClosedDirwatcherWithNotConsumedEvents", func(t *testing.T) {
 
-		ctx, cancel := context.WithCancel(ctx)
+		ctx, cancel := context.WithTimeout(ctx, 5*time.Second)
 		defer cancel()
 
 		dw, err := NewDirWatcher(ctx, IN_CREATE, dir)
@@ -146,7 +146,7 @@ func TestDirWatcher(t *testing.T) {
 	})
 
 	t.Run("ClosedDirwatcherBecomesDone", func(t *testing.T) {
-		ctx, cancel := context.WithCancel(ctx)
+		ctx, cancel := context.WithTimeout(ctx, 5*time.Second)
 		defer cancel()
 
 		dw, err := NewDirWatcher(ctx, IN_CREATE, dir)
