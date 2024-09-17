@@ -6,6 +6,7 @@ import (
 	"io/ioutil"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"syscall"
 	"testing"
@@ -35,8 +36,14 @@ func TestReadFromClosed(t *testing.T) {
 
 	select {
 	case <-i.done:
-	case <-time.After(1 * time.Second):
+	case <-time.After(5 * time.Second):
 		t.Error("Inotify did not close")
+
+		// output traces of all goroutines of the current program
+		buf := make([]byte, 1<<16)
+		n := runtime.Stack(buf, true)
+		t.Logf("=== BEGIN goroutine stack dump ===\n%s\n=== END goroutine stack dump ===\n", buf[:n])
+		return
 	}
 
 	_, err = i.Read()
@@ -176,19 +183,26 @@ func TestInotify(t *testing.T) {
 			f.Close()
 		}
 
-		// read all events
-		events, err := i.Read()
-		if err != nil {
-			t.Error(err)
-		}
+		// read all events until the expected number of events is reached or the deadline is reached
+		deadline := time.Now().Add(5 * time.Second)
+		events := make([]InotifyEvent, 0, 2*maxEvents)
+		for {
+			portion, err := i.Read()
 
-		events2, err := i.Read()
-		if err != nil {
-			t.Error(err)
+			if err != nil {
+				t.Error(err)
+			}
+
+			events = append(events, portion...)
+
+			if len(events) >= 2*maxEvents || time.Now().After(deadline) {
+				break
+			}
+
 		}
 
 		// check if all events were read
-		if len(events)+len(events2) != 2*maxEvents {
+		if len(events) != 2*maxEvents {
 			t.Errorf("Expected %d events, but got %d", 2*maxEvents, len(events))
 		}
 

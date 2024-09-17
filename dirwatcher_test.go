@@ -34,6 +34,7 @@ func TestDirWatcher(t *testing.T) {
 		dw, err := NewDirWatcher(ctx, IN_CREATE, dir)
 		if err != nil {
 			t.Error(err)
+			t.Fail()
 		}
 
 		e := <-dw.C

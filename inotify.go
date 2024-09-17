@@ -6,6 +6,7 @@ package gonotify
 import (
 	"context"
 	"errors"
+	"os"
 	"path/filepath"
 	"strings"
 	"sync"
@@ -17,12 +18,6 @@ import (
 const (
 	// maxEvents is the maximum number of events to read in one syscall
 	maxEvents = 1024
-
-	// defaultReadTimeout is the default timeout for Read() method. Should be > readRetryDelay
-	defaultReadTimeout = time.Millisecond * 50
-
-	// readRetryDelay is the delay between read attempts
-	readRetryDelay = time.Millisecond * 20
 )
 
 type addWatchRequest struct {
@@ -45,8 +40,7 @@ type Inotify struct {
 	rmByPathIn chan string
 	eventsOut  chan eventItem
 
-	readMutex         sync.Mutex
-	readDeadlineMutex sync.Mutex
+	readMutex sync.Mutex
 }
 
 // NewInotify creates new inotify instance
@@ -55,6 +49,10 @@ func NewInotify(ctx context.Context) (*Inotify, error) {
 	if err != nil {
 		return nil, err
 	}
+
+	file := os.NewFile(uintptr(fd), "inotify")
+
+	//ctx, cancel := context.WithCancel(ctx)
 
 	inotify := &Inotify{
 		ctx:        ctx,
@@ -75,38 +73,45 @@ func NewInotify(ctx context.Context) (*Inotify, error) {
 	wg := sync.WaitGroup{}
 
 	wg.Add(1)
+	go func() {
+		//defer cancel()
+		<-ctx.Done()
+		file.Close()
+		wg.Done()
+	}()
+
+	wg.Add(1)
 	// read events goroutine. Only this goroutine can read or close the inotify file descriptor
 	go func() {
-
+		//defer cancel()
 		defer wg.Done()
-		defer syscall.Close(fd)
+		//defer file.Close()
 		defer close(inotify.eventsOut)
 
 		// reusable buffers for reading inotify events. Make sure they're not
 		// leaked into other goroutines, as they're not thread safe
-		events := make([]InotifyEvent, 0, maxEvents)
 		buf := make([]byte, maxEvents*(syscall.SizeofInotifyEvent+syscall.NAME_MAX+1))
 
 		for {
 
-			events = events[:0]
+			select {
+			case <-ctx.Done():
+				return
+			default:
+			}
 
 			var n int
 
 			for {
-				n, err = syscall.Read(fd, buf)
+
+				select {
+				case <-ctx.Done():
+					return
+				default:
+				}
+
+				n, err = file.Read(buf)
 				if err != nil {
-					if err == syscall.EAGAIN || err == syscall.EWOULDBLOCK {
-
-						// wait for a little bit while
-						select {
-						case <-ctx.Done():
-							return
-						case <-time.After(readRetryDelay):
-						}
-
-						continue
-					}
 
 					// if we got an error, we should return
 					select {
@@ -172,24 +177,38 @@ func NewInotify(ctx context.Context) (*Inotify, error) {
 
 				name = filepath.Join(watchName, name)
 
-				events = append(events, InotifyEvent{
+				inotifyEvent := InotifyEvent{
 					Wd:     uint32(event.Wd),
 					Name:   name,
 					Mask:   event.Mask,
 					Cookie: event.Cookie,
-				})
-			}
+				}
 
-			// send events to the channel
-			for _, e := range events {
+				// watch was removed explicitly or automatically
+				if inotifyEvent.Is(IN_IGNORED) {
+
+					// remove watch
+
+					select {
+					case <-ctx.Done():
+						return
+					case inotify.rmByWdIn <- inotifyEvent.Wd:
+					case <-time.After(1 * time.Second):
+					}
+
+					continue
+
+				}
+
 				select {
 				case <-ctx.Done():
 					return
 				case inotify.eventsOut <- eventItem{
-					InotifyEvent: e,
+					InotifyEvent: inotifyEvent,
 					err:          nil,
 				}:
 				}
+
 			}
 
 		}
@@ -199,6 +218,7 @@ func NewInotify(ctx context.Context) (*Inotify, error) {
 	wg.Add(1)
 	// main goroutine (handle channels)
 	go func() {
+		//defer cancel()
 		defer wg.Done()
 
 		watches := make(map[string]uint32)
@@ -273,6 +293,7 @@ func NewInotify(ctx context.Context) (*Inotify, error) {
 	}()
 
 	go func() {
+		//defer cancel()
 		wg.Wait()
 		close(inotify.done)
 	}()
@@ -333,40 +354,91 @@ func (i *Inotify) RmWatch(pathName string) error {
 func (i *Inotify) Read() ([]InotifyEvent, error) {
 	i.readMutex.Lock()
 	defer i.readMutex.Unlock()
-	for {
-		evts, err := i.ReadDeadline(time.Now().Add(defaultReadTimeout))
-		if err != nil {
-			return evts, err
+
+	events := make([]InotifyEvent, 0, maxEvents)
+
+	select {
+	case <-i.ctx.Done():
+		return events, i.ctx.Err()
+	case <-i.Done():
+		return events, errors.New("inotify closed")
+	case evt, ok := <-i.eventsOut:
+
+		if !ok {
+			return events, errors.New("inotify closed")
+		}
+		if evt.err != nil {
+			return events, evt.err
 		}
 
-		if len(evts) > 0 {
-			return evts, nil
+		if evt.InotifyEvent.Wd != 0 {
+			// append first event
+			events = append(events, evt.InotifyEvent)
 		}
+
+		if len(events) >= maxEvents {
+			return events, nil
+		}
+
+		// read all available events
+	read:
+		for {
+
+			select {
+			case <-i.ctx.Done():
+				return events, i.ctx.Err()
+			case <-i.Done():
+				return events, errors.New("inotify closed")
+			case evt, ok := <-i.eventsOut:
+				if !ok {
+					return events, errors.New("inotify closed")
+				}
+				if evt.err != nil {
+					return events, evt.err
+				}
+
+				if evt.InotifyEvent.Wd != 0 {
+					// append event
+					events = append(events, evt.InotifyEvent)
+				}
+
+				if len(events) >= maxEvents {
+					return events, nil
+				}
+
+			default:
+				break read
+			}
+
+		}
+
 	}
+
+	return events, nil
 }
 
 // ReadDeadline waits for InotifyEvents until deadline is reached, or context is cancelled. If
 // deadline is reached, TimeoutError is returned.
 func (i *Inotify) ReadDeadline(deadline time.Time) ([]InotifyEvent, error) {
-	i.readDeadlineMutex.Lock()
-	defer i.readDeadlineMutex.Unlock()
+	i.readMutex.Lock()
+	defer i.readMutex.Unlock()
 
 	events := make([]InotifyEvent, 0, maxEvents)
 
 	for {
 		select {
 		case <-i.ctx.Done():
-			return nil, i.ctx.Err()
+			return events, i.ctx.Err()
 		case <-i.Done():
-			return nil, errors.New("Inotify closed")
+			return events, errors.New("Inotify closed")
 		case <-time.After(time.Until(deadline)):
 			return events, nil
 		case evt, ok := <-i.eventsOut:
 			if !ok {
-				return nil, errors.New("Inotify closed")
+				return events, errors.New("Inotify closed")
 			}
 			if evt.err != nil {
-				return nil, evt.err
+				return events, evt.err
 			}
 
 			events = append(events, evt.InotifyEvent)
