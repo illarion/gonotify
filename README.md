@@ -8,7 +8,7 @@ Simple Golang inotify wrapper.
 
 * Low level
   * `Inotify` - wrapper around [inotify(7)](http://man7.org/linux/man-pages/man7/inotify.7.html)
-  * `InotifyEvent` - generated file/folder event. Contains `Name` (full path), watch descriptior and `Mask` that describes the event.
+  * `InotifyEvent` - generated file/folder event. Contains `Name` (full path), `Wd` - watch descriptor and `Mask` that describes the event.
 
 * Higher level
   * `FileWatcher` - higher level utility, helps to watch the list of files for changes, creation or removal
@@ -17,51 +17,55 @@ Simple Golang inotify wrapper.
 
 Use `FileWatcher` and `DirWatcher` as an example and build your own utility classes.
 
-
 ### Usage
 
 ```go
 package main
 
 import (
-	"fmt"
-	"github.com/illarion/gonotify/v2"
-	"time"
-	"context"
+  "fmt"
+  "github.com/illarion/gonotify/v2"
+  "time"
+  "context"
 )
 
 func main() {
 
-	ctx, cancel := context.WithCancel(context.Background())
+  ctx, cancel := context.WithCancel(context.Background())
 
-	watcher, err := gonotify.NewDirWatcher(ctx, gonotify.IN_CREATE|gonotify.IN_CLOSE, "/tmp")
-	if err != nil {
-		panic(err)
-	}
+  watcher, err := gonotify.NewDirWatcher(ctx, gonotify.IN_CREATE|gonotify.IN_CLOSE, "/tmp")
+  if err != nil {
+    panic(err)
+  }
 
-	for {
-		select {
-		case event := <-watcher.C:
-			fmt.Printf("Event: %s\n", event)
+  main:
+  for {
+    select {
+    case event := <-watcher.C:
+      fmt.Printf("Event: %s\n", event)
 
-			if event.Mask&gonotify.IN_CREATE != 0 {
-				fmt.Printf("File created: %s\n", event.Name)
-			}
+      if event.Is(gonotify.IN_CREATE) {
+        fmt.Printf("File created: %s\n", event.Name)
+      }
 
-			if event.Mask&gonotify.IN_CLOSE != 0 {
-				fmt.Printf("File closed: %s\n", event.Name)
-			}
+      if event.IsAny(gonotify.IN_CLOSE, gonotify.IN_CLOSE_WRITE) {
+        fmt.Printf("File closed: %s\n", event.Name)
+      }
 
-		case <-time.After(5 * time.Second):
-			fmt.Println("Timeout")
-			cancel()
-			return
-		}
-	}
+    case <-time.After(5 * time.Second):
+      fmt.Println("Good bye!")
+      cancel()
+      break main
+    }
+  }
+  
+  // Wait for watcher to finish all internal goroutines
+  <-watcher.Done()
+  fmt.Println("Watcher is done")
+  
 }
-
 ```
 
 ## License
-MIT. See LICENSE file for more details.
+MIT. See [LICENSE](LICENSE) file for more details.
 
