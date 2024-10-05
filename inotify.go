@@ -16,8 +16,10 @@ import (
 
 // max number of events to read at once
 const maxEvents = 1024
+const maxUint32 = int(^uint32(0))
 
 var TimeoutError = errors.New("Inotify timeout")
+var UnsignedIntegerOverflowError = errors.New("unsigned integer overflow")
 
 type addWatchRequest struct {
 	pathName string
@@ -107,10 +109,14 @@ func NewInotify(ctx context.Context) (*Inotify, error) {
 				return
 			case req := <-inotify.addWatchIn:
 				wd, err := syscall.InotifyAddWatch(fd, req.pathName, req.mask)
-				if err == nil {
+				verr := ValidateInteger(wd)
+				if err == nil && verr != nil {
 					wdu32 := uint32(wd)
 					watches[req.pathName] = wdu32
 					paths[wdu32] = req.pathName
+				}
+				if err == nil && verr != nil {
+					err = verr
 				}
 				select {
 				case req.result <- err:
@@ -178,6 +184,17 @@ func NewInotify(ctx context.Context) (*Inotify, error) {
 					offset := 0
 					for offset+syscall.SizeofInotifyEvent <= n {
 						event := (*syscall.InotifyEvent)(unsafe.Pointer(&buf[offset]))
+						verr := ValidateInteger(int(event.Wd))
+						if verr != nil {
+							response.err = UnsignedIntegerOverflowError
+							response.events = events
+							select {
+							case req.result <- response:
+							case <-ctx.Done():
+							}
+							continue main
+						}
+
 						var name string
 						{
 							nameStart := offset + syscall.SizeofInotifyEvent
@@ -324,4 +341,11 @@ func (i *Inotify) ReadDeadline(deadline time.Time) ([]InotifyEvent, error) {
 			return resp.events, resp.err
 		}
 	}
+}
+
+func ValidateInteger(wd int) error {
+	if wd > 0 && wd > maxUint32 {
+		return UnsignedIntegerOverflowError
+	}
+	return nil
 }

@@ -2,6 +2,7 @@ package gonotify
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"io/ioutil"
 	"os"
@@ -75,7 +76,6 @@ func BenchmarkWatch(b *testing.B) {
 }
 
 func TestInotify(t *testing.T) {
-
 	ctx := context.Background()
 
 	dir, err := ioutil.TempDir("", "TestInotify")
@@ -330,5 +330,21 @@ func TestInotify(t *testing.T) {
 			t.Errorf("Length of read events is %d, but extected %d", len(events), expected)
 		}
 
+	})
+}
+
+func TestValidateInteger(t *testing.T) {
+	t.Run("Overflows", func(t *testing.T) {
+		verr := ValidateInteger(5294967295)
+		if !errors.Is(verr, UnsignedIntegerOverflowError) {
+			t.Error(verr)
+		}
+	})
+
+	t.Run("Ok", func(t *testing.T) {
+		verr := ValidateInteger(22949)
+		if errors.Is(verr, UnsignedIntegerOverflowError) {
+			t.Error(verr)
+		}
 	})
 }
