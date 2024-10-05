@@ -16,7 +16,7 @@ import (
 )
 
 const (
-	// max number of events to read at once
+	// maxEvents is the maximum number of events to read in one syscall
 	maxEvents = 1024
 
 	// maximum size of unsigned int32
