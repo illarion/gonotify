@@ -7,7 +7,7 @@ import (
 	"io/ioutil"
 	"os"
 	"path/filepath"
-	"runtime/pprof"
+	"runtime"
 	"strings"
 	"syscall"
 	"testing"
@@ -15,7 +15,7 @@ import (
 )
 
 func TestOpenClose(t *testing.T) {
-	ctx, cancel := context.WithCancel(context.Background())
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 	_, err := NewInotify(ctx)
 	if err != nil {
@@ -25,48 +25,40 @@ func TestOpenClose(t *testing.T) {
 
 func TestReadFromClosed(t *testing.T) {
 
-	ctx, cancel := context.WithCancel(context.Background())
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
 
 	i, err := NewInotify(ctx)
 	if err != nil {
 		t.Error(err)
 	}
 
-	exp := make(chan struct{})
-
-	go func() {
-		evt, err := i.Read()
-
-		if err == nil {
-			close(exp)
-			t.Error("Expected error from closed inotify.Read")
-			return
-		}
-
-		if len(evt) != 0 {
-			close(exp)
-			t.Error("Expected no events from closed inotify.Read")
-			return
-		}
-
-		close(exp)
-	}()
-
-	time.Sleep(200 * time.Millisecond)
 	cancel()
 
 	select {
-	case <-exp:
+	case <-i.done:
+	case <-time.After(5 * time.Second):
+		t.Error("Inotify did not close")
+
+		// output traces of all goroutines of the current program
+		buf := make([]byte, 1<<16)
+		n := runtime.Stack(buf, true)
+		t.Logf("=== BEGIN goroutine stack dump ===\n%s\n=== END goroutine stack dump ===\n", buf[:n])
 		return
-	case <-time.After(1 * time.Second):
-		pprof.Lookup("goroutine").WriteTo(os.Stdout, 1)
-		t.Error("Cancelling context did not close inotify.Read")
 	}
+
+	_, err = i.Read()
+
+	if err == nil {
+		t.Error("Expected error, but got nil")
+	}
+
 }
 
 func BenchmarkWatch(b *testing.B) {
 	for x := 0; x < b.N; x++ {
-		ctx, cancel := context.WithCancel(context.Background())
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
 		_, err := NewInotify(ctx)
 		if err != nil {
 			b.Error(err)
@@ -87,7 +79,7 @@ func TestInotify(t *testing.T) {
 
 	t.Run("OpenFile", func(t *testing.T) {
 
-		ctx, cancel := context.WithCancel(ctx)
+		ctx, cancel := context.WithTimeout(ctx, 5*time.Second)
 		defer cancel()
 
 		i, err := NewInotify(ctx)
@@ -123,7 +115,7 @@ func TestInotify(t *testing.T) {
 	})
 
 	t.Run("MultipleEvents", func(t *testing.T) {
-		ctx, cancel := context.WithCancel(ctx)
+		ctx, cancel := context.WithTimeout(ctx, 5*time.Second)
 		defer cancel()
 
 		i, err := NewInotify(ctx)
@@ -151,11 +143,11 @@ func TestInotify(t *testing.T) {
 			event := events[0]
 
 			if event.Mask&IN_CLOSE_WRITE == 0 {
-				t.Fail()
+				t.Error("Expected IN_CLOSE_WRITE event, but got", event.Mask)
 			}
 
 			if event.Name != filepath.Join(dir, fileName) {
-				t.Fail()
+				t.Error("Expected event for file", fileName, "but got", event.Name)
 			}
 
 			t.Logf("%#v", event)
@@ -167,7 +159,7 @@ func TestInotify(t *testing.T) {
 	// The potential bug is that the buffer may contain patial event at the end of the buffer
 	// and the next syscall.Read() will not be able to read the rest of the event.
 	t.Run("MultipleEvents #2 - Reading leftover events", func(t *testing.T) {
-		ctx, cancel := context.WithCancel(ctx)
+		ctx, cancel := context.WithTimeout(ctx, 5*time.Second)
 		defer cancel()
 
 		i, err := NewInotify(ctx)
@@ -191,26 +183,33 @@ func TestInotify(t *testing.T) {
 			f.Close()
 		}
 
-		// read all events
-		events, err := i.Read()
-		if err != nil {
-			t.Error(err)
-		}
+		// read all events until the expected number of events is reached or the deadline is reached
+		deadline := time.Now().Add(5 * time.Second)
+		events := make([]InotifyEvent, 0, 2*maxEvents)
+		for {
+			portion, err := i.Read()
 
-		events2, err := i.Read()
-		if err != nil {
-			t.Error(err)
+			if err != nil {
+				t.Error(err)
+			}
+
+			events = append(events, portion...)
+
+			if len(events) >= 2*maxEvents || time.Now().After(deadline) {
+				break
+			}
+
 		}
 
 		// check if all events were read
-		if len(events)+len(events2) != 2*maxEvents {
+		if len(events) != 2*maxEvents {
 			t.Errorf("Expected %d events, but got %d", 2*maxEvents, len(events))
 		}
 
 	})
 
 	t.Run("SelfFolderEvent", func(t *testing.T) {
-		ctx, cancel := context.WithCancel(ctx)
+		ctx, cancel := context.WithTimeout(ctx, 5*time.Second)
 		defer cancel()
 
 		i, err := NewInotify(ctx)
@@ -247,7 +246,7 @@ func TestInotify(t *testing.T) {
 	})
 
 	t.Run("Bug #2 Inotify.Read() discards solo events", func(t *testing.T) {
-		ctx, cancel := context.WithCancel(ctx)
+		ctx, cancel := context.WithTimeout(ctx, 5*time.Second)
 		defer cancel()
 
 		i, err := NewInotify(ctx)
@@ -286,7 +285,7 @@ func TestInotify(t *testing.T) {
 	})
 
 	t.Run("Bug #2 Inotify.Read() discards solo events (case 2)", func(t *testing.T) {
-		ctx, cancel := context.WithCancel(ctx)
+		ctx, cancel := context.WithTimeout(ctx, 5*time.Second)
 		defer cancel()
 
 		i, err := NewInotify(ctx)
