@@ -16,10 +16,12 @@ import (
 
 // max number of events to read at once
 const maxEvents = 1024
-const maxUint32 = int(^uint32(0))
+
+// maximum size of unsigned int32
+const MaxUint32 = int(^uint32(0))
 
 var TimeoutError = errors.New("Inotify timeout")
-var UnsignedIntegerOverflowError = errors.New("unsigned integer overflow")
+var WatchesNumberUint32OverflowError = errors.New("watches number overflow")
 
 type addWatchRequest struct {
 	pathName string
@@ -109,17 +111,15 @@ func NewInotify(ctx context.Context) (*Inotify, error) {
 				return
 			case req := <-inotify.addWatchIn:
 				wd, err := syscall.InotifyAddWatch(fd, req.pathName, req.mask)
-				verr := ValidateInteger(wd)
-				if err == nil && verr != nil {
+				verr := ValidateVsMaximumAllowedUint32Size(wd)
+				if err == nil && verr == nil {
 					wdu32 := uint32(wd)
 					watches[req.pathName] = wdu32
 					paths[wdu32] = req.pathName
 				}
-				if err == nil && verr != nil {
-					err = verr
-				}
 				select {
 				case req.result <- err:
+				case req.result <- verr:
 				case <-ctx.Done():
 				}
 			case req := <-inotify.readIn:
@@ -184,9 +184,9 @@ func NewInotify(ctx context.Context) (*Inotify, error) {
 					offset := 0
 					for offset+syscall.SizeofInotifyEvent <= n {
 						event := (*syscall.InotifyEvent)(unsafe.Pointer(&buf[offset]))
-						verr := ValidateInteger(int(event.Wd))
+						verr := ValidateVsMaximumAllowedUint32Size(int(event.Wd))
 						if verr != nil {
-							response.err = UnsignedIntegerOverflowError
+							response.err = WatchesNumberUint32OverflowError
 							response.events = events
 							select {
 							case req.result <- response:
@@ -343,9 +343,9 @@ func (i *Inotify) ReadDeadline(deadline time.Time) ([]InotifyEvent, error) {
 	}
 }
 
-func ValidateInteger(wd int) error {
-	if wd > 0 && wd > maxUint32 {
-		return UnsignedIntegerOverflowError
+func ValidateVsMaximumAllowedUint32Size(wd int) error {
+	if wd > 0 && wd > MaxUint32 {
+		return WatchesNumberUint32OverflowError
 	}
 	return nil
 }

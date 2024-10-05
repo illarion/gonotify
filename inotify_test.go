@@ -335,14 +335,14 @@ func TestInotify(t *testing.T) {
 
 func TestValidateInteger(t *testing.T) {
 	t.Run("Overflows", func(t *testing.T) {
-		verr := ValidateInteger(5294967295)
+		verr := ValidateVsMaximumAllowedUint32Size(5294967295)
 		if !errors.Is(verr, UnsignedIntegerOverflowError) {
 			t.Error(verr)
 		}
 	})
 
 	t.Run("Ok", func(t *testing.T) {
-		verr := ValidateInteger(22949)
+		verr := ValidateVsMaximumAllowedUint32Size(22949)
 		if errors.Is(verr, UnsignedIntegerOverflowError) {
 			t.Error(verr)
 		}
