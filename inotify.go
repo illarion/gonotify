@@ -161,6 +161,12 @@ func NewInotify(ctx context.Context) (*Inotify, error) {
 					offset = nameEnd
 				}
 
+				// how to address?
+				// verr := ValidateVsMaximumAllowedUint32Size(int(event.Wd))
+				// if verr != nil {
+				// 	return nil, verr
+				// }
+
 				req := getPathRequest{wd: uint32(event.Wd), result: make(chan string)}
 				var watchName string
 
