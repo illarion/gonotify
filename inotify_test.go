@@ -340,6 +340,13 @@ func TestValidateInteger(t *testing.T) {
 		}
 	})
 
+	t.Run("Negative", func(t *testing.T) {
+		verr := ValidateVsMaximumAllowedUint32Size(-1)
+		if !errors.Is(verr, WatchesNumberUint32OverflowError) {
+			t.Error(verr)
+		}
+	})
+
 	t.Run("Ok", func(t *testing.T) {
 		verr := ValidateVsMaximumAllowedUint32Size(22949)
 		if errors.Is(verr, WatchesNumberUint32OverflowError) {

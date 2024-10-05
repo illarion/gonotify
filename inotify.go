@@ -461,7 +461,7 @@ func (i *Inotify) ReadDeadline(deadline time.Time) ([]InotifyEvent, error) {
 }
 
 func ValidateVsMaximumAllowedUint32Size(wd int) error {
-	if wd > 0 && wd > MaxUint32 {
+	if wd < 0 || wd > MaxUint32 {
 		return WatchesNumberUint32OverflowError
 	}
 	return nil
