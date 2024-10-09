@@ -23,7 +23,6 @@ const (
 )
 
 var TimeoutError = errors.New("Inotify timeout")
-var WatchesNumberUint32OverflowError = errors.New("watches number overflow")
 
 type addWatchRequest struct {
 	pathName string
