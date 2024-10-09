@@ -81,7 +81,7 @@ func InMaskToString(in_mask uint32) string {
 // InotifyEvent is the go representation of inotify_event found in sys/inotify.h
 type InotifyEvent struct {
 	// Watch descriptor
-	Wd uint32
+	Wd int
 	// File or directory name
 	Name string
 	// Contains bits that describe the event that occurred

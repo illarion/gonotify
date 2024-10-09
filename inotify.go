@@ -13,14 +13,13 @@ import (
 	"syscall"
 	"time"
 	"unsafe"
+
+	"github.com/illarion/gonotify/v2/syscallf"
 )
 
 const (
 	// maxEvents is the maximum number of events to read in one syscall
 	maxEvents = 1024
-
-	// maximum size of unsigned int32
-	MaxUint32 = int(^uint32(0))
 )
 
 var TimeoutError = errors.New("Inotify timeout")
@@ -42,7 +41,7 @@ type Inotify struct {
 	ctx        context.Context
 	done       chan struct{}
 	addWatchIn chan addWatchRequest
-	rmByWdIn   chan uint32
+	rmByWdIn   chan int
 	rmByPathIn chan string
 	eventsOut  chan eventItem
 
@@ -64,13 +63,13 @@ func NewInotify(ctx context.Context) (*Inotify, error) {
 		ctx:        ctx,
 		done:       make(chan struct{}),
 		addWatchIn: make(chan addWatchRequest),
-		rmByWdIn:   make(chan uint32),
+		rmByWdIn:   make(chan int),
 		rmByPathIn: make(chan string),
 		eventsOut:  make(chan eventItem, maxEvents),
 	}
 
 	type getPathRequest struct {
-		wd     uint32
+		wd     int
 		result chan string
 	}
 
@@ -161,13 +160,7 @@ func NewInotify(ctx context.Context) (*Inotify, error) {
 					offset = nameEnd
 				}
 
-				// how to address?
-				// verr := ValidateVsMaximumAllowedUint32Size(int(event.Wd))
-				// if verr != nil {
-				// 	return nil, verr
-				// }
-
-				req := getPathRequest{wd: uint32(event.Wd), result: make(chan string)}
+				req := getPathRequest{wd: int(event.Wd), result: make(chan string)}
 				var watchName string
 
 				select {
@@ -190,7 +183,7 @@ func NewInotify(ctx context.Context) (*Inotify, error) {
 				name = filepath.Join(watchName, name)
 
 				inotifyEvent := InotifyEvent{
-					Wd:     uint32(event.Wd),
+					Wd:     int(event.Wd),
 					Name:   name,
 					Mask:   event.Mask,
 					Cookie: event.Cookie,
@@ -233,8 +226,8 @@ func NewInotify(ctx context.Context) (*Inotify, error) {
 		//defer cancel()
 		defer wg.Done()
 
-		watches := make(map[string]uint32)
-		paths := make(map[uint32]string)
+		watches := make(map[string]int)
+		paths := make(map[int]string)
 
 		for {
 			select {
@@ -262,7 +255,7 @@ func NewInotify(ctx context.Context) (*Inotify, error) {
 				}
 
 				for _, w := range watches {
-					_, err := syscall.InotifyRmWatch(fd, w)
+					_, err := syscallf.InotifyRmWatch(fd, w)
 					if err != nil {
 						continue
 					}
@@ -271,15 +264,12 @@ func NewInotify(ctx context.Context) (*Inotify, error) {
 				return
 			case req := <-inotify.addWatchIn:
 				wd, err := syscall.InotifyAddWatch(fd, req.pathName, req.mask)
-				verr := ValidateVsMaximumAllowedUint32Size(wd)
-				if err == nil && verr == nil {
-					wdu32 := uint32(wd)
-					watches[req.pathName] = wdu32
-					paths[wdu32] = req.pathName
+				if err == nil {
+					watches[req.pathName] = wd
+					paths[wd] = req.pathName
 				}
 				select {
 				case req.result <- err:
-				case req.result <- verr:
 				case <-ctx.Done():
 				}
 			case wd := <-inotify.rmByWdIn:
@@ -344,7 +334,7 @@ func (i *Inotify) AddWatch(pathName string, mask uint32) error {
 }
 
 // RmWd removes watch by watch descriptor
-func (i *Inotify) RmWd(wd uint32) error {
+func (i *Inotify) RmWd(wd int) error {
 	select {
 	case <-i.ctx.Done():
 		return i.ctx.Err()
@@ -464,11 +454,4 @@ func (i *Inotify) ReadDeadline(deadline time.Time) ([]InotifyEvent, error) {
 		}
 	}
 
-}
-
-func ValidateVsMaximumAllowedUint32Size(wd int) error {
-	if wd < 0 || wd > MaxUint32 {
-		return WatchesNumberUint32OverflowError
-	}
-	return nil
 }
