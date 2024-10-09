@@ -1,5 +1,5 @@
 // Copyright 2009 The Go Authors.
-// based on golang's syscall.InotifyRmWatch
+// based on golang's syscall_linux.go
 
 package syscallf
 
