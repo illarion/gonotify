@@ -67,7 +67,6 @@ func BenchmarkWatch(b *testing.B) {
 }
 
 func TestInotify(t *testing.T) {
-
 	ctx := context.Background()
 
 	dir, err := ioutil.TempDir("", "TestInotify")
