@@ -48,7 +48,8 @@ func NewDirWatcher(ctx context.Context, fileMask uint32, root string) (*DirWatch
 
 			return nil
 		}
-		return i.AddWatch(path, IN_ALL_EVENTS)
+		_, err = i.AddWatch(path, IN_ALL_EVENTS)
+		return err
 	})
 
 	if err != nil {

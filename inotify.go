@@ -14,7 +14,7 @@ import (
 	"time"
 	"unsafe"
 
-	"github.com/illarion/gonotify/v2/syscallf"
+	"github.com/illarion/gonotify/v3/syscallf"
 )
 
 const (
@@ -22,11 +22,25 @@ const (
 	maxEvents = 1024
 )
 
-var TimeoutError = errors.New("Inotify timeout")
+type addWatchResult struct {
+	wd  int
+	err error
+}
 
 type addWatchRequest struct {
 	pathName string
 	mask     uint32
+	result   chan addWatchResult
+}
+
+type rmWdRequest struct {
+	wd      int
+	ignored bool // if true, the watch was removed automatically
+	result  chan error
+}
+
+type rmPathRequest struct {
+	pathName string
 	result   chan error
 }
 
@@ -40,8 +54,8 @@ type Inotify struct {
 	ctx        context.Context
 	done       chan struct{}
 	addWatchIn chan addWatchRequest
-	rmByWdIn   chan int
-	rmByPathIn chan string
+	rmByWdIn   chan rmWdRequest
+	rmByPathIn chan rmPathRequest
 	eventsOut  chan eventItem
 
 	readMutex sync.Mutex
@@ -56,14 +70,12 @@ func NewInotify(ctx context.Context) (*Inotify, error) {
 
 	file := os.NewFile(uintptr(fd), "inotify")
 
-	//ctx, cancel := context.WithCancel(ctx)
-
 	inotify := &Inotify{
 		ctx:        ctx,
 		done:       make(chan struct{}),
 		addWatchIn: make(chan addWatchRequest),
-		rmByWdIn:   make(chan int),
-		rmByPathIn: make(chan string),
+		rmByWdIn:   make(chan rmWdRequest),
+		rmByPathIn: make(chan rmPathRequest),
 		eventsOut:  make(chan eventItem, maxEvents),
 	}
 
@@ -80,16 +92,14 @@ func NewInotify(ctx context.Context) (*Inotify, error) {
 	go func() {
 		//defer cancel()
 		<-ctx.Done()
-		file.Close()
+		//file.Close()
 		wg.Done()
 	}()
 
 	wg.Add(1)
 	// read events goroutine. Only this goroutine can read or close the inotify file descriptor
 	go func() {
-		//defer cancel()
 		defer wg.Done()
-		//defer file.Close()
 		defer close(inotify.eventsOut)
 
 		// reusable buffers for reading inotify events. Make sure they're not
@@ -193,11 +203,26 @@ func NewInotify(ctx context.Context) (*Inotify, error) {
 
 					// remove watch
 
+					result := make(chan error)
+
 					select {
 					case <-ctx.Done():
 						return
-					case inotify.rmByWdIn <- inotifyEvent.Wd:
+					case inotify.rmByWdIn <- rmWdRequest{
+						wd:      int(event.Wd),
+						ignored: true,
+						result:  result,
+					}:
 					case <-time.After(1 * time.Second):
+					}
+
+					select {
+					case <-ctx.Done():
+						return
+					case err := <-result:
+						if err != nil {
+							// TODO log error
+						}
 					}
 
 					continue
@@ -240,7 +265,10 @@ func NewInotify(ctx context.Context) (*Inotify, error) {
 					case req := <-inotify.addWatchIn:
 						// Send error to addWatch requests
 						select {
-						case req.result <- errors.New("Inotify instance closed"):
+						case req.result <- addWatchResult{
+							wd:  0,
+							err: errors.New("Inotify instance closed"),
+						}:
 						default:
 						}
 					case <-inotify.rmByWdIn:
@@ -268,23 +296,40 @@ func NewInotify(ctx context.Context) (*Inotify, error) {
 					paths[wd] = req.pathName
 				}
 				select {
+				case req.result <- addWatchResult{wd: wd, err: err}:
+				case <-ctx.Done():
+				}
+			case req := <-inotify.rmByWdIn:
+				pathName, ok := paths[req.wd]
+				if !ok {
+					continue
+				}
+
+				if !req.ignored {
+					_, err = syscallf.InotifyRmWatch(fd, req.wd)
+				}
+
+				delete(watches, pathName)
+				delete(paths, req.wd)
+
+				select {
 				case req.result <- err:
 				case <-ctx.Done():
 				}
-			case wd := <-inotify.rmByWdIn:
-				pathName, ok := paths[wd]
+			case req := <-inotify.rmByPathIn:
+				wd, ok := watches[req.pathName]
 				if !ok {
 					continue
 				}
-				delete(watches, pathName)
+				_, err := syscallf.InotifyRmWatch(fd, wd)
+
+				delete(watches, req.pathName)
 				delete(paths, wd)
-			case pathName := <-inotify.rmByPathIn:
-				wd, ok := watches[pathName]
-				if !ok {
-					continue
+
+				select {
+				case req.result <- err:
+				case <-ctx.Done():
 				}
-				delete(watches, pathName)
-				delete(paths, wd)
 			case req := <-getPathIn:
 				wd := paths[req.wd]
 				select {
@@ -310,45 +355,71 @@ func (i *Inotify) Done() <-chan struct{} {
 }
 
 // AddWatch adds given path to list of watched files / folders
-func (i *Inotify) AddWatch(pathName string, mask uint32) error {
+func (i *Inotify) AddWatch(pathName string, mask uint32) (int, error) {
 
 	req := addWatchRequest{
 		pathName: pathName,
 		mask:     mask,
-		result:   make(chan error),
+		result:   make(chan addWatchResult),
 	}
 
 	select {
 	case <-i.ctx.Done():
-		return i.ctx.Err()
+		return 0, i.ctx.Err()
 	case i.addWatchIn <- req:
 
 		select {
 		case <-i.ctx.Done():
-			return i.ctx.Err()
-		case err := <-req.result:
-			return err
+			return 0, i.ctx.Err()
+		case result := <-req.result:
+			return result.wd, result.err
 		}
 	}
 }
 
 // RmWd removes watch by watch descriptor
 func (i *Inotify) RmWd(wd int) error {
+
+	req := rmWdRequest{
+		wd:      wd,
+		ignored: false,
+		result:  make(chan error),
+	}
+
 	select {
 	case <-i.ctx.Done():
 		return i.ctx.Err()
-	case i.rmByWdIn <- wd:
-		return nil
+	case i.rmByWdIn <- req:
 	}
+
+	select {
+	case <-i.ctx.Done():
+		return i.ctx.Err()
+	case err := <-req.result:
+		return err
+	}
+
 }
 
 // RmWatch removes watch by pathName
 func (i *Inotify) RmWatch(pathName string) error {
+
+	req := rmPathRequest{
+		pathName: pathName,
+		result:   make(chan error),
+	}
+
 	select {
 	case <-i.ctx.Done():
 		return i.ctx.Err()
-	case i.rmByPathIn <- pathName:
-		return nil
+	case i.rmByPathIn <- req:
+	}
+
+	select {
+	case <-i.ctx.Done():
+		return i.ctx.Err()
+	case err := <-req.result:
+		return err
 	}
 }
 
@@ -421,7 +492,7 @@ func (i *Inotify) Read() ([]InotifyEvent, error) {
 }
 
 // ReadDeadline waits for InotifyEvents until deadline is reached, or context is cancelled. If
-// deadline is reached, TimeoutError is returned.
+// deadline is reached, it will return all events read until that point.
 func (i *Inotify) ReadDeadline(deadline time.Time) ([]InotifyEvent, error) {
 	i.readMutex.Lock()
 	defer i.readMutex.Unlock()

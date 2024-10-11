@@ -29,7 +29,7 @@ func NewFileWatcher(ctx context.Context, mask uint32, files ...string) (*FileWat
 	expectedPaths := make(map[string]bool)
 
 	for _, file := range files {
-		err := inotify.AddWatch(filepath.Dir(file), mask)
+		_, err := inotify.AddWatch(filepath.Dir(file), mask)
 		if err != nil {
 			return nil, err
 		}
