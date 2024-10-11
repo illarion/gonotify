@@ -24,7 +24,7 @@ package main
 
 import (
   "fmt"
-  "github.com/illarion/gonotify/v2"
+  "github.com/illarion/gonotify/v3"
   "time"
   "context"
 )
