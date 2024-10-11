@@ -2,7 +2,7 @@
 
 Simple Golang inotify wrapper.
 
-[![GoDoc](https://godoc.org/github.com/illarion/gonotify/v2?status.svg)](https://godoc.org/github.com/illarion/gonotify/v2)
+[![GoDoc](https://godoc.org/github.com/illarion/gonotify/v3?status.svg)](https://godoc.org/github.com/illarion/gonotify/v3)
 
 ### Provides following primitives:
 
